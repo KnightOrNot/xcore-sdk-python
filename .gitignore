@@ -11,3 +11,11 @@ scripts/
 
 # Release packaging output
 dist/
+
+.venv/
+.venv-sdk/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+logs/
+_rokae_log_/

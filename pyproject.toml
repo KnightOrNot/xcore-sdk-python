@@ -1,0 +1,30 @@
+[project]
+name = "xcoresdk-python"
+version = "0.1.0"
+description = "xCore SDK CLI and six-axis robot client"
+readme = "README.md"
+authors = [
+    { name = "RightOrNot", email = "jue1251665735@outlook.com" }
+]
+requires-python = ">=3.11,<3.12"
+dependencies = []
+
+[project.scripts]
+xcore = "xcoresdk_python.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "ruff>=0.11,<1"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+extend-exclude = ["example", "Release"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
