@@ -103,6 +103,26 @@ def test_motion_reports_actual_target_and_requests_zero_blend(fake):
     assert robot.calls.index("moveReset") < robot.calls.index("moveStart")
 
 
+@pytest.mark.parametrize("requested, expected", [(None, 1000), (50, 50)])
+def test_motion_speed_default_and_override_are_forwarded_to_sdk(
+    fake, monkeypatch, requested, expected
+):
+    sdk, robot = fake
+    factory = sdk.MoveAbsJCommand
+    sent = []
+
+    def command(target, speed, zone):
+        sent.append((speed, zone))
+        return factory(target, speed, zone)
+
+    monkeypatch.setattr(sdk, "MoveAbsJCommand", command)
+    arm = RobotDriver("192.168.2.160", sdk=sdk, robot=robot)
+    options = {} if requested is None else {"speed": requested}
+    result = arm.movej([0.01] * 6, **options)
+    assert sent == [(expected, 0)]
+    assert result["speed_mm_s"] == expected
+
+
 def test_failed_start_requests_stop(fake):
     sdk, robot = fake
     robot.failure = "moveStart"

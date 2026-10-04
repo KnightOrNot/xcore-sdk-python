@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .driver import DEFAULT_SPEED
 from .exceptions import XCoreError
 from .network import configure_address, diagnose
 from .worker import RESULT_PREFIX
@@ -93,7 +94,10 @@ def parser() -> argparse.ArgumentParser:
             name, parents=[common], help="Execute a bounded joint move"
         )
         motion.add_argument(
-            "--speed", type=finite, default=50, help="SDK speed in mm/s"
+            "--speed",
+            type=finite,
+            default=DEFAULT_SPEED,
+            help="SDK speed in mm/s (default: %(default)s; allowed: 5..4000)",
         )
         motion.add_argument("--max-step-deg", type=finite, default=10)
         motion.add_argument("--tolerance-deg", type=finite, default=0.2)

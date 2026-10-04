@@ -67,6 +67,23 @@ def test_query_error_returns_one(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().err)["ok"] is False
 
 
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["movej", "--joints", "0", "0", "0", "0", "0", "0"],
+        ["move-joint", "--joint", "6", "--delta-deg", "1"],
+    ],
+)
+@pytest.mark.parametrize("extra, expected", [([], 1000), (["--speed", "50"], 50)])
+def test_motion_cli_default_and_explicit_speed(monkeypatch, arguments, extra, expected):
+    def inspect(options):
+        assert options["speed"] == expected
+        return {"ok": True}
+
+    monkeypatch.setattr(cli, "isolated", inspect)
+    assert cli.main(arguments + extra) == 0
+
+
 def test_worker_timeout_leaves_no_background_process(monkeypatch):
     real_popen = subprocess.Popen
     children = []

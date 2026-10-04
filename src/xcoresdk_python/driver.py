@@ -9,6 +9,8 @@ from typing import Any
 from .exceptions import XCoreError
 from .reader import RobotConnection, vector
 
+DEFAULT_SPEED = 1000.0
+
 
 class RobotDriver(RobotConnection):
     def power(self, on: bool) -> dict[str, Any]:
@@ -32,7 +34,7 @@ class RobotDriver(RobotConnection):
         self,
         target_rad: list[float],
         *,
-        speed: float = 50,
+        speed: float = DEFAULT_SPEED,
         max_step_deg: float = 10,
         tolerance_deg: float = 0.2,
         motion_timeout: float = 15,
@@ -84,6 +86,7 @@ class RobotDriver(RobotConnection):
                     return {
                         "reached": True,
                         "command_id": identifier.content(),
+                        "speed_mm_s": speed,
                         "target_rad": target,
                         "actual_rad": actual,
                         "max_error_deg": math.degrees(error),
