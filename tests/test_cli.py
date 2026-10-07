@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from xcoresdk_python import cli
+from xcore_sdk_python import cli
 
 
 @pytest.mark.parametrize(

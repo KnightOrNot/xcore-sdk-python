@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from xcoresdk_python import RobotConnection, RobotDriver, XCoreError
+from xcore_sdk_python import RobotConnection, RobotDriver, XCoreError
 
 
 def test_query_session_does_not_issue_preparation_commands(fake):

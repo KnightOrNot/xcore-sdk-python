@@ -1,6 +1,6 @@
 # xCore SDK Python：CR7 命令行控制
 
-基于珞石 SDK，提供统一入口 `uv run xcore COMMAND [OPTIONS]` 和可复用的 Python 连接／驱动层。开发细节见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)，厂商 SDK 安装说明见 [docs/README.md](docs/README.md)。
+基于珞石 SDK，提供统一入口 `uv run xcore-sdk-python COMMAND [OPTIONS]` 和可复用的 Python 连接／驱动层。开发细节见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)，厂商 SDK 安装说明见 [docs/README.md](docs/README.md)。
 
 2026-10-04 已先用原生 SDK 完成实机连接、状态、关节角、法兰位姿、软限位和 DH 参数读取，再验证 CLI。实机返回：
 
@@ -20,11 +20,11 @@
 在本目录执行：
 
 ```bash
-cd /home/knight/projects/xcore/xcoresdk-python
+cd /home/knight/projects/xcore/xcore-sdk-python
 uv sync --frozen --python 3.11
-uv run xcore doctor
-uv run xcore network
-uv run xcore status
+uv run xcore-sdk-python doctor
+uv run xcore-sdk-python network
+uv run xcore-sdk-python status
 ```
 
 本机已经具备 `Release/linux/xCoreSDK_python.cpython-311-x86_64-linux-gnu.so`。新电脑需要先从 [官方 SDK v0.7.1 Release](https://github.com/RokaeRobot/xCoreSDK-Python/releases/tag/v0.7.1) 获取与操作系统、CPU 架构和 CPython 版本匹配的二进制；二进制不纳入 Git。`doctor` 检查扩展加载和 API，不连接机械臂。
@@ -34,16 +34,16 @@ uv run xcore status
 默认机械臂 IP 为 `192.168.2.160`，可显式指定或通过环境变量配置：
 
 ```bash
-uv run xcore status --ip 192.168.2.160 --timeout 20
+uv run xcore-sdk-python status --ip 192.168.2.160 --timeout 20
 export XCORE_ROBOT_IP=192.168.2.160
 ```
 
 本次已在 NetworkManager 的有线连接配置中保存附加地址 `192.168.2.100/24`，保留原有 DHCP 配置；临时探测地址已清理。在另一台电脑上，可先通过以下命令临时添加同网段地址，接口名按实际网卡替换：
 
 ```bash
-uv run xcore network configure --interface enx00e04c634750 --address 192.168.2.100/24
-uv run xcore network
-uv run xcore status
+uv run xcore-sdk-python network configure --interface enx00e04c634750 --address 192.168.2.100/24
+uv run xcore-sdk-python network
+uv run xcore-sdk-python status
 ```
 
 `network configure/reset` 仅修改当前活动网卡配置，需要系统允许当前用户操作 NetworkManager。永久配置方法及本次保存的连接 UUID 见开发文档。`network` 中 TCP 端口可达不代表 SDK 握手成功，应以 `status` 返回 `ok: true` 为准。
@@ -59,12 +59,12 @@ SDK 建连可能重置运动相关状态，断开连接可能停止已有运动�
 连接 GELLO 串口，将两臂摆到相同关节姿态并保持不动。只读取现场参考姿态，不发送运动目标：
 
 ```bash
-uv run xcore follow-calibrate --ref-current \
+uv run xcore-sdk-python follow-calibrate --ref-current \
   --serial /dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTB4C7PQ-if00-port0 \
   --save config/cr7_calib.json
 ```
 
-标定文件不纳入 Git，已有文件不会被覆盖。单姿态标定无法自动判断轴方向；默认六轴方向均为 `+1`，若现场方向不同，用 `--signs S1 S2 S3 S4 S5 S6` 指定六个 `+1`／`-1`，再重新标定并逐轴核对 dry-run。完整帮助：`uv run xcore follow-calibrate --help`。
+标定文件不纳入 Git，已有文件不会被覆盖。单姿态标定无法自动判断轴方向；默认六轴方向均为 `+1`，若现场方向不同，用 `--signs S1 S2 S3 S4 S5 S6` 指定六个 `+1`／`-1`，再重新标定并逐轴核对 dry-run。完整帮助：`uv run xcore-sdk-python follow-calibrate --help`。
 
 ### 2. 预览，再启动跟随
 
@@ -78,7 +78,7 @@ uv run xcore follow-calibrate --ref-current \
 ./scripts/start_gello_follow.sh --enable-motion
 ```
 
-在上一级 xcore 工作区也可直接使用 `./start_gello_follow.sh`。无需同时开两个终端。脚本先运行离线参数检查、`doctor` 和只读 `follow-check`，然后启动服务端并等待就绪，最后启动主臂客户端。服务端独占一个 SDK 连接；跟随期间不要另开 `status`、`power`、`movej` 等连接同一机械臂的命令。
+在控制器目录 xcore-controller 中也可直接使用 `./start_gello_follow.sh`。无需同时开两个终端。脚本先运行离线参数检查、`doctor` 和只读 `follow-check`，然后启动服务端并等待就绪，最后启动主臂客户端。服务端独占一个 SDK 连接；跟随期间不要另开 `status`、`power`、`movej` 等连接同一机械臂的命令。
 
 | 脚本参数 | 用途／默认值 |
 | --- | --- |
@@ -100,10 +100,10 @@ uv run xcore follow-calibrate --ref-current \
 
 | 指令 | 功能 | 示例 |
 | --- | --- | --- |
-| `follow-check` | 只读采样示教臂并校验标定，不连接 CR7 | `uv run xcore follow-check --calib config/cr7_calib.json` |
-| `follow-calibrate` | 用两臂相同参考姿态生成六轴零位偏移 | `uv run xcore follow-calibrate --ref-current --save config/cr7_calib.json` |
-| `follow-server` | 独占 CR7 SDK 会话，通过 ZMQ 提供状态和目标接口 | `uv run xcore follow-server --local-ip 192.168.2.100` |
-| `follow` | 读取 GELLO，向服务端发送六轴目标或只读预览 | `uv run xcore follow --dry-run --calib config/cr7_calib.json` |
+| `follow-check` | 只读采样示教臂并校验标定，不连接 CR7 | `uv run xcore-sdk-python follow-check --calib config/cr7_calib.json` |
+| `follow-calibrate` | 用两臂相同参考姿态生成六轴零位偏移 | `uv run xcore-sdk-python follow-calibrate --ref-current --save config/cr7_calib.json` |
+| `follow-server` | 独占 CR7 SDK 会话，通过 ZMQ 提供状态和目标接口 | `uv run xcore-sdk-python follow-server --local-ip 192.168.2.100` |
+| `follow` | 读取 GELLO，向服务端发送六轴目标或只读预览 | `uv run xcore-sdk-python follow --dry-run --calib config/cr7_calib.json` |
 
 `follow-server` 默认只读；真机调试时需显式加 `--enable-motion`，客户端 `follow` 省略 `--dry-run`。这两条长驻命令输出运行日志，区别于一次性查询的 JSON 输出。通常使用上面的脚本统一管理。
 
@@ -116,9 +116,9 @@ uv run xcore follow-calibrate --ref-current \
 所有命令均在项目根目录执行，参数放在子命令之后：
 
 ```bash
-uv run xcore COMMAND [OPTIONS]
-uv run xcore --help
-uv run xcore move-joint --help
+uv run xcore-sdk-python COMMAND [OPTIONS]
+uv run xcore-sdk-python --help
+uv run xcore-sdk-python move-joint --help
 ```
 
 一次性 SDK 查询与控制命令输出 JSON；成功退出码为 `0`，执行失败为 `1`，参数错误为 `2`，等待超时为 `124`，键盘中断为 `130`。`--output` 仅保存成功结果，自动创建父目录，不覆盖已有文件。
@@ -134,7 +134,7 @@ uv run xcore move-joint --help
 例如，指定机械臂地址并保存状态：
 
 ```bash
-uv run xcore status --ip 192.168.2.160 --timeout 20 --output logs/status.json
+uv run xcore-sdk-python status --ip 192.168.2.160 --timeout 20 --output logs/status.json
 ```
 
 `network` 的系统查询各有独立时限，`check` 的 `--timeout` 分别用于每个检查进程；这两类命令不使用 SDK 的整体等待时限。详细规则见 [开发文档](docs/DEVELOPMENT.md#命令与参数)。
@@ -147,10 +147,10 @@ uv run xcore status --ip 192.168.2.160 --timeout 20 --output logs/status.json
 
 | 命令 | 功能 | 最简示例 | 带参数示例 |
 | --- | --- | --- | --- |
-| `status` | 汇总型号、版本、电源、模式、运行状态、六轴角度和法兰位姿 | `uv run xcore status` | `uv run xcore status --ip 192.168.2.160 --output logs/status.json` |
-| `joints` | 读取 J1～J6 当前角度，同时输出弧度和度 | `uv run xcore joints` | `uv run xcore joints --ip 192.168.2.160 --output logs/joints.json` |
-| `pose` | 读取法兰或工具末端位姿 | `uv run xcore pose` | `uv run xcore pose --frame tool --output logs/tool-pose.json` |
-| `monitor` | 在一个连接中采集多次状态，结束后统一输出 | `uv run xcore monitor` | `uv run xcore monitor --duration 10 --interval 0.5 --timeout 20 --output logs/status-samples.json` |
+| `status` | 汇总型号、版本、电源、模式、运行状态、六轴角度和法兰位姿 | `uv run xcore-sdk-python status` | `uv run xcore-sdk-python status --ip 192.168.2.160 --output logs/status.json` |
+| `joints` | 读取 J1～J6 当前角度，同时输出弧度和度 | `uv run xcore-sdk-python joints` | `uv run xcore-sdk-python joints --ip 192.168.2.160 --output logs/joints.json` |
+| `pose` | 读取法兰或工具末端位姿 | `uv run xcore-sdk-python pose` | `uv run xcore-sdk-python pose --frame tool --output logs/tool-pose.json` |
+| `monitor` | 在一个连接中采集多次状态，结束后统一输出 | `uv run xcore-sdk-python monitor` | `uv run xcore-sdk-python monitor --duration 10 --interval 0.5 --timeout 20 --output logs/status-samples.json` |
 
 `pose` 默认 `--frame flange`，表示法兰相对基座；`--frame tool` 表示末端相对当前参考坐标系。位姿格式为 `[x, y, z, rx, ry, rz]`，位置单位为米，姿态角单位为弧度。
 
@@ -160,9 +160,9 @@ uv run xcore status --ip 192.168.2.160 --timeout 20 --output logs/status.json
 
 | 命令 | 功能 | 最简示例 | 带参数示例 |
 | --- | --- | --- | --- |
-| `info` | 读取机器人型号、标识、控制器版本、轴数和 MAC | `uv run xcore info` | `uv run xcore info --ip 192.168.2.160 --output logs/robot-info.json` |
-| `limits` | 读取当前控制器软限位及启用状态 | `uv run xcore limits` | `uv run xcore limits --output logs/soft-limits.json` |
-| `dh` | 读取六轴 DH 参数，默认返回校准／设置后的值 | `uv run xcore dh` | `uv run xcore dh --nominal --output logs/dh-nominal.json` |
+| `info` | 读取机器人型号、标识、控制器版本、轴数和 MAC | `uv run xcore-sdk-python info` | `uv run xcore-sdk-python info --ip 192.168.2.160 --output logs/robot-info.json` |
+| `limits` | 读取当前控制器软限位及启用状态 | `uv run xcore-sdk-python limits` | `uv run xcore-sdk-python limits --output logs/soft-limits.json` |
+| `dh` | 读取六轴 DH 参数，默认返回校准／设置后的值 | `uv run xcore-sdk-python dh` | `uv run xcore-sdk-python dh --nominal --output logs/dh-nominal.json` |
 
 `dh --nominal` 返回标称值；每轴参数顺序为 `[Alpha(度), A(毫米), D(毫米), Theta(度)]`。`joints` 与 `dh` 同时保留 SDK 原始数组和额外槽位，六轴解析及建模约定见 [开发文档](docs/DEVELOPMENT.md#反馈格式与建模参数)。
 
@@ -172,15 +172,15 @@ uv run xcore status --ip 192.168.2.160 --timeout 20 --output logs/status.json
 
 | 命令 | 功能 | 最简示例 | 带参数示例 |
 | --- | --- | --- | --- |
-| `mode` | 切换手动／自动模式 | `uv run xcore mode automatic` | `uv run xcore mode manual --ip 192.168.2.160` |
-| `power` | 显式上电／下电，并读取电源状态 | `uv run xcore power on` | `uv run xcore power off --ip 192.168.2.160` |
-| `stop` | 请求停止并读取运行状态 | `uv run xcore stop` | `uv run xcore stop --ip 192.168.2.160 --timeout 10` |
-| `move-joint` | 指定单轴，相对该轴当前角度增减 | `uv run xcore move-joint --joint 6 --delta-deg 1` | `uv run xcore move-joint --joint 6 --delta-deg 1 --speed 1000 --max-step-deg 2 --tolerance-deg 0.2 --motion-timeout 15 --timeout 20` |
-| `movej` | 移动到 J1～J6 的六个绝对目标角度 | `uv run xcore movej --joints J1 J2 J3 J4 J5 J6` | `uv run xcore movej --joints J1 J2 J3 J4 J5 J6 --unit deg --speed 1000 --max-step-deg 2 --tolerance-deg 0.2 --motion-timeout 15 --timeout 20` |
+| `mode` | 切换手动／自动模式 | `uv run xcore-sdk-python mode automatic` | `uv run xcore-sdk-python mode manual --ip 192.168.2.160` |
+| `power` | 显式上电／下电，并读取电源状态 | `uv run xcore-sdk-python power on` | `uv run xcore-sdk-python power off --ip 192.168.2.160` |
+| `stop` | 请求停止并读取运行状态 | `uv run xcore-sdk-python stop` | `uv run xcore-sdk-python stop --ip 192.168.2.160 --timeout 10` |
+| `move-joint` | 指定单轴，相对该轴当前角度增减 | `uv run xcore-sdk-python move-joint --joint 6 --delta-deg 1` | `uv run xcore-sdk-python move-joint --joint 6 --delta-deg 1 --speed 1000 --max-step-deg 2 --tolerance-deg 0.2 --motion-timeout 15 --timeout 20` |
+| `movej` | 移动到 J1～J6 的六个绝对目标角度 | `uv run xcore-sdk-python movej --joints J1 J2 J3 J4 J5 J6` | `uv run xcore-sdk-python movej --joints J1 J2 J3 J4 J5 J6 --unit deg --speed 1000 --max-step-deg 2 --tolerance-deg 0.2 --motion-timeout 15 --timeout 20` |
 
 `movej` 示例中的 `J1 … J6` 是占位符，使用时替换为实际规划的六个目标值。`--unit` 可选 `deg`／`rad`，默认 `deg`。`move-joint --joint` 使用 `1～6` 的轴编号，`--delta-deg` 始终以度为单位，正负值分别表示沿该关节坐标正向／反向移动。
 
-本机在手动模式下直接执行 `power on` 曾返回 `ec: -514`（上下电失败）；2026-10-04 实测先执行 `uv run xcore mode automatic`，再执行 `uv run xcore power on`，两步均成功。SDK 规定，有外接使能开关或示教器时，手动模式的软件上电受限制。`power on` 不会隐式切换模式，初次上电应按上述顺序执行；`-514` 本身是通用上电失败码，其他情况下还需结合控制器状态判断。
+本机在手动模式下直接执行 `power on` 曾返回 `ec: -514`（上下电失败）；2026-10-04 实测先执行 `uv run xcore-sdk-python mode automatic`，再执行 `uv run xcore-sdk-python power on`，两步均成功。SDK 规定，有外接使能开关或示教器时，手动模式的软件上电受限制。`power on` 不会隐式切换模式，初次上电应按上述顺序执行；`-514` 本身是通用上电失败码，其他情况下还需结合控制器状态判断。
 
 #### 运动公共参数
 
@@ -199,20 +199,20 @@ uv run xcore status --ip 192.168.2.160 --timeout 20 --output logs/status.json
 
 ```bash
 # 读取当前姿态，切换自动模式并上电
-uv run xcore status
-uv run xcore mode automatic
-uv run xcore power on
+uv run xcore-sdk-python status
+uv run xcore-sdk-python mode automatic
+uv run xcore-sdk-python power on
 
 # 第六轴相对当前角度增加 1°，然后相对新的当前位置减少 1°
-uv run xcore move-joint --joint 6 --delta-deg 1 --speed 50 --max-step-deg 2
-uv run xcore move-joint --joint 6 --delta-deg -1 --speed 50 --max-step-deg 2
+uv run xcore-sdk-python move-joint --joint 6 --delta-deg 1 --speed 50 --max-step-deg 2
+uv run xcore-sdk-python move-joint --joint 6 --delta-deg -1 --speed 50 --max-step-deg 2
 
 # 结束后下电并切回手动模式
-uv run xcore power off
-uv run xcore mode manual
+uv run xcore-sdk-python power off
+uv run xcore-sdk-python mode manual
 ```
 
-两次相反的相对移动会受实际到位误差影响；需要返回指定原始姿态时，应保存开始时的六轴角度，再用 `movej` 下发该绝对目标。需要中途停止时执行 `uv run xcore stop`。命令结束后不会自动下电或恢复操作模式，应按需要显式执行收尾命令。
+两次相反的相对移动会受实际到位误差影响；需要返回指定原始姿态时，应保存开始时的六轴角度，再用 `movej` 下发该绝对目标。需要中途停止时执行 `uv run xcore-sdk-python stop`。命令结束后不会自动下电或恢复操作模式，应按需要显式执行收尾命令。
 
 #### 默认速度的实测依据
 
@@ -233,11 +233,11 @@ uv run xcore mode manual
 
 | 命令 | 功能 | 最简示例 | 带参数示例 |
 | --- | --- | --- | --- |
-| `doctor` | 检查 Python、SDK 二进制和必要 API，不连接机械臂 | `uv run xcore doctor` | `uv run xcore doctor --sdk-dir Release/linux --output logs/doctor.json` |
-| `network` | 检查电脑 IPv4 地址、路由、邻居表及 SDK TCP 6666 端口 | `uv run xcore network` | `uv run xcore network check --ip 192.168.2.160 --output logs/network.json` |
-| `network configure` | 给指定网卡临时增加电脑 IPv4 地址 | `uv run xcore network configure --interface enx00e04c634750` | `uv run xcore network configure --interface enx00e04c634750 --address 192.168.2.100/24` |
-| `network reset` | 从指定网卡移除该活动地址 | `uv run xcore network reset --interface enx00e04c634750` | `uv run xcore network reset --interface enx00e04c634750 --address 192.168.2.100/24` |
-| `check` | 执行离线测试、lint 和格式检查 | `uv run xcore check` | `uv run xcore check --fix --timeout 60` |
+| `doctor` | 检查 Python、SDK 二进制和必要 API，不连接机械臂 | `uv run xcore-sdk-python doctor` | `uv run xcore-sdk-python doctor --sdk-dir Release/linux --output logs/doctor.json` |
+| `network` | 检查电脑 IPv4 地址、路由、邻居表及 SDK TCP 6666 端口 | `uv run xcore-sdk-python network` | `uv run xcore-sdk-python network check --ip 192.168.2.160 --output logs/network.json` |
+| `network configure` | 给指定网卡临时增加电脑 IPv4 地址 | `uv run xcore-sdk-python network configure --interface enx00e04c634750` | `uv run xcore-sdk-python network configure --interface enx00e04c634750 --address 192.168.2.100/24` |
+| `network reset` | 从指定网卡移除该活动地址 | `uv run xcore-sdk-python network reset --interface enx00e04c634750` | `uv run xcore-sdk-python network reset --interface enx00e04c634750 --address 192.168.2.100/24` |
+| `check` | 执行离线测试、lint 和格式检查 | `uv run xcore-sdk-python check` | `uv run xcore-sdk-python check --fix --timeout 60` |
 
 网卡名称按实际环境替换。`network configure/reset` 默认地址为 `192.168.2.100/24`，只操作电脑的活动网卡配置；`reset` 不删除 NetworkManager 已保存的配置。`check --fix` 会应用代码 lint／格式修正，再运行测试。网络诊断和环境检查通过后，仍需用 `status` 验证完整 SDK 通信。
 

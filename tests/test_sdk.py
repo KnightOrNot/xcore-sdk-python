@@ -1,7 +1,7 @@
 import pytest
 
-from xcoresdk_python import XCoreError
-from xcoresdk_python.sdk import load_sdk, sdk_directory
+from xcore_sdk_python import XCoreError
+from xcore_sdk_python.sdk import load_sdk, sdk_directory
 
 
 def test_missing_binary_has_actionable_message(tmp_path):

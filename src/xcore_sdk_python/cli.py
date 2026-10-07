@@ -1,4 +1,4 @@
-"""Unified `uv run xcore COMMAND OPTIONS` entry point."""
+"""Unified `uv run xcore-sdk-python COMMAND OPTIONS` entry point."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def ipv4(value: str) -> str:
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(
-        prog="xcore", description="xCore robot diagnostics and control"
+        prog="xcore-sdk-python", description="xCore robot diagnostics and control"
     )
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
@@ -264,7 +264,7 @@ def terminate(process: subprocess.Popen) -> None:
 
 def isolated(options: dict[str, Any]) -> dict[str, Any]:
     child = subprocess.Popen(
-        [sys.executable, "-m", "xcoresdk_python.worker"],
+        [sys.executable, "-m", "xcore_sdk_python.worker"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

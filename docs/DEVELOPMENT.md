@@ -1,6 +1,6 @@
 # xCore SDK 项目搭建与开发
 
-首次使用见 [README](../README.md)。本文命令默认在 `xcoresdk-python/` 目录执行。工程结构以 `../../agilex/agilex-controller` 的跟随启动流程及其 `agilexrobotics` 包的 CLI、连接层、驱动层和测试组织为参考；`../../gello for CR7` 用于参考 CR7 SDK 接口与实时运动控制。通信采用 xCore SDK 的以太网接口。
+首次使用见 [README](../README.md)。本文命令默认在 `xcore-sdk-python/` 目录执行。工程结构以 `../../agilex/agilex-controller` 的跟随启动流程及其 `agilex_sdk_python` 包的 CLI、连接层、驱动层和测试组织为参考；`../../gello for CR7` 用于参考 CR7 SDK 接口与实时运动控制。通信采用 xCore SDK 的以太网接口。
 
 ## 环境与安装
 
@@ -8,8 +8,8 @@
 
 ```bash
 uv sync --frozen --python 3.11
-uv run xcore doctor
-uv run xcore check
+uv run xcore-sdk-python doctor
+uv run xcore-sdk-python check
 ```
 
 如果已有 pyenv 解释器，可用 `uv sync --python /home/knight/.pyenv/versions/3.11.16/bin/python`。`.python-version` 指定 3.11，`pyproject.toml` 当前要求 `>=3.11,<3.12`。跟随功能增加 numpy、pyzmq 和 Dynamixel SDK 依赖；依赖变更后使用 `uv lock` 更新锁文件，再用 `uv sync --frozen` 安装锁定版本。开发组使用 pytest 和 Ruff。
@@ -31,8 +31,8 @@ uv run xcore check
 本次在有线网卡上增加候选网段地址并逐网段探测，发现 **`192.168.2.160`** 的 SDK TCP 6666 端口可达，再通过原生 `xMateRobot.connectToRobot` 和 `robotInfo` 确认机器人身份。电脑增加 `192.168.2.100/24` 后，路由为 `192.168.2.160 dev enx00e04c634750 src 192.168.2.100`；该通信不再走 VPN 的默认路由。
 
 ```bash
-uv run xcore network --ip 192.168.2.160
-uv run xcore status --ip 192.168.2.160
+uv run xcore-sdk-python network --ip 192.168.2.160
+uv run xcore-sdk-python status --ip 192.168.2.160
 ```
 
 诊断输出包含接口 IPv4 地址、路由、邻居表和 TCP 6666 可达性。`same_subnet_on_route_interface` 用于核查流量是否走有同网段地址的接口。代理可能接受 TCP 连接却无法完成机器人协议，所以端口探测不能替代 SDK 查询。
@@ -40,8 +40,8 @@ uv run xcore status --ip 192.168.2.160
 临时添加／移除地址：
 
 ```bash
-uv run xcore network configure --interface enx00e04c634750 --address 192.168.2.100/24
-uv run xcore network reset --interface enx00e04c634750 --address 192.168.2.100/24
+uv run xcore-sdk-python network configure --interface enx00e04c634750 --address 192.168.2.100/24
+uv run xcore-sdk-python network reset --interface enx00e04c634750 --address 192.168.2.100/24
 ```
 
 底层使用 `nmcli device modify` 并核查地址是否实际生效；重连或重启后不保证保留。`reset` 移除当前地址，不会删除已保存的连接配置。当前电脑已另行完成永久配置，连接 UUID 为 `1ab4e868-1502-357e-af94-180b52fcaf9a`，保存的是 DHCP 加附加静态地址：
@@ -92,7 +92,7 @@ finally:
 ## 架构与扩展
 
 ```text
-uv run xcore
+uv run xcore-sdk-python
   → cli.py 参数校验、JSON 输出、进程超时
   → worker.py 私有 SDK 子进程
   → commands.py 单次会话分派
@@ -106,7 +106,7 @@ check   → pytest / Ruff（不访问机械臂）
 | 文件 | 职责 |
 | --- | --- |
 | `pyproject.toml`、`uv.lock` | 解释器约束、依赖、构建和 `xcore` 入口 |
-| `src/xcoresdk_python/sdk.py` | 按平台与 ABI 延迟加载扩展，环境检查 |
+| `src/xcore_sdk_python/sdk.py` | 按平台与 ABI 延迟加载扩展，环境检查 |
 | `reader.py` | 建连／断连、错误码检查、机器人信息与反馈转换 |
 | `driver.py` | 显式上电、模式、停止、带条件检查的非实时运动 |
 | `commands.py` | 将 CLI 请求转换为会话中的 SDK 调用 |
@@ -118,7 +118,7 @@ check   → pytest / Ruff（不访问机械臂）
 Python 应用可复用导出的类：
 
 ```python
-from xcoresdk_python import RobotConnection
+from xcore_sdk_python import RobotConnection
 
 with RobotConnection("192.168.2.160") as arm:
     print(arm.status())
@@ -129,7 +129,7 @@ with RobotConnection("192.168.2.160") as arm:
 
 ## 命令与参数
 
-统一格式为 `uv run xcore COMMAND [OPTIONS]`，公共参数放在子命令之后，`uv run xcore COMMAND --help` 可查看完整帮助。
+统一格式为 `uv run xcore-sdk-python COMMAND [OPTIONS]`，公共参数放在子命令之后，`uv run xcore-sdk-python COMMAND --help` 可查看完整帮助。
 
 | 命令 | 参数／行为 |
 | --- | --- |
@@ -184,7 +184,7 @@ DH 返回 28 项；前 24 项整理为六行 `rows`，尾部四项零值保留�
 | 5 | 90 | 0 | 150 | 0 |
 | 6 | -90 | 0 | 127 | 0 |
 
-可用 `uv run xcore dh --output logs/dh-calibrated.json` 导出本机校准值。转换 URDF 前仍需确认厂商 DH 坐标系约定、零位、方向和工具变换；不能只凭上述长度推断 CR35-45/1.9C 与本机结构同构。
+可用 `uv run xcore-sdk-python dh --output logs/dh-calibrated.json` 导出本机校准值。转换 URDF 前仍需确认厂商 DH 坐标系约定、零位、方向和工具变换；不能只凭上述长度推断 CR35-45/1.9C 与本机结构同构。
 
 实测软限位为 A1/A4/A5/A6 ±360°、A2 ±135°、A3 [-170°, 140°]。这些是控制器当前配置，不能当作机械本体的绝对范围，也不能用手册的统一 ±175°覆盖它们；框架每次运动前读取实际配置。
 
@@ -262,10 +262,10 @@ SDK 原生调用可能阻塞，CLI 到总时限后终止工作进程，必要时
 ## 日常开发
 
 ```bash
-uv run xcore --help
-uv run xcore move-joint --help
-uv run xcore check
-uv run xcore check --fix
+uv run xcore-sdk-python --help
+uv run xcore-sdk-python move-joint --help
+uv run xcore-sdk-python check
+uv run xcore-sdk-python check --fix
 ```
 
 测试采用假 SDK，不访问网卡或控制机械臂；进程超时测试使用真实睡眠子进程核查清理。增加命令时先实现连接／驱动方法，再在 `commands.py` 分派、`cli.py` 定义参数，并针对错误和行为边界补测试。新硬件方法应记录实机验证状态。
@@ -275,8 +275,8 @@ uv run xcore check --fix
 ## 六轴示教臂跟随的工程组织
 
 ```text
-xcore/start_gello_follow.sh                 工作区便捷入口
-  → xcoresdk-python/scripts/start_gello_follow.sh
+xcore-controller/start_gello_follow.sh                 工作区便捷入口
+  → xcore-sdk-python/scripts/start_gello_follow.sh
       → uv run --locked --project ... xcore doctor / follow-check
       → 后台 follow-server                 独占 CR7 SDK 会话
       → follow 客户端                      读取 GELLO 并发目标
@@ -302,9 +302,9 @@ ZMQ 采用 GELLO 的 `num_dofs`、`get_joint_state`、`command_joint_state`、`g
 
 ```bash
 uv sync --frozen --python 3.11
-uv run xcore doctor
+uv run xcore-sdk-python doctor
 # 两臂摆到相同关节姿态并保持不动；方向按现场确认
-uv run xcore follow-calibrate --ref-current --save config/cr7_calib.json
+uv run xcore-sdk-python follow-calibrate --ref-current --save config/cr7_calib.json
 ./scripts/start_gello_follow.sh
 ./scripts/start_gello_follow.sh --enable-motion
 ```

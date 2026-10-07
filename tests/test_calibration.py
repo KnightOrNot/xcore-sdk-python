@@ -4,7 +4,7 @@ import math
 import numpy as np
 import pytest
 
-from xcoresdk_python.calibration import load_calibration, reference_offsets
+from xcore_sdk_python.calibration import load_calibration, reference_offsets
 
 
 def test_circular_reference_offsets_handle_wrap_and_negative_sign():

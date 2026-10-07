@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 sdk_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-xcore=(uv run --locked --project "$sdk_dir" xcore)
+xcore=(uv run --locked --project "$sdk_dir" xcore-sdk-python)
 robot_ip="${XCORE_ROBOT_IP:-192.168.2.160}"
 local_ip="${XCORE_LOCAL_IP:-192.168.2.100}"
 gello_port="${XCORE_GELLO_PORT:-/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTB4C7PQ-if00-port0}"
@@ -25,7 +25,7 @@ usage() {
   --ip IP              CR7 IP，默认 192.168.2.160
   --local-ip IP        本机有线 IP，默认 192.168.2.100（必须已配置）
   --gello-port PATH    GELLO 串口
-  --calib FILE         现场标定 JSON，默认 xcoresdk-python/config/cr7_calib.json
+  --calib FILE         现场标定 JSON，默认 xcore-sdk-python/config/cr7_calib.json
   --port PORT          本机 ZMQ 端口，默认 6001
   --hz HZ              主臂读取／目标发送频率，默认 50 Hz
   --max-speed-deg V    CR7 跟随关节速度上限，默认 3 °/s
@@ -86,7 +86,7 @@ done
 for task_command in uv flock setsid; do
     command -v "$task_command" >/dev/null || fail "未安装 $task_command"
 done
-[[ -r "$calib" ]] || fail "缺少可读标定文件：$calib；先运行 xcore follow-calibrate"
+[[ -r "$calib" ]] || fail "缺少可读标定文件：$calib；先运行 xcore-sdk-python follow-calibrate"
 [[ -r "$gello_port" && -w "$gello_port" ]] || fail "GELLO 串口不存在或无读写权限：$gello_port"
 
 # Only the launcher owns the descriptor; its child processes must not inherit it.
@@ -96,7 +96,7 @@ flock -n 9 || fail "已有跟随启动流程正在运行"
 # Parse all motion/network options before connecting to CR7 or opening the serial port.
 uv run --locked --project "$sdk_dir" python - "$robot_ip" "$local_ip" "$server_port" "$hz" "$max_speed_deg" <<'PY'
 import sys
-from xcoresdk_python.cli import parser, validate
+from xcore_sdk_python.cli import parser, validate
 root = parser()
 server = root.parse_args(["follow-server", "--ip", sys.argv[1], "--local-ip", sys.argv[2],
                          "--port", sys.argv[3], "--max-speed-deg", sys.argv[5]])

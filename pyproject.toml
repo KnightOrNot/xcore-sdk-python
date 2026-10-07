@@ -1,5 +1,5 @@
 [project]
-name = "xcoresdk-python"
+name = "xcore-sdk-python"
 version = "0.1.0"
 description = "xCore SDK CLI and six-axis robot client"
 readme = "README.md"
@@ -14,7 +14,8 @@ dependencies = [
 ]
 
 [project.scripts]
-xcore = "xcoresdk_python.cli:main"
+xcore-sdk-python = "xcore_sdk_python.cli:main"
+xcore = "xcore_sdk_python.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.12.7,<0.13.0"]
@@ -34,6 +35,6 @@ extend-exclude = ["example", "Release"]
 select = ["E", "F", "I", "B"]
 
 [tool.ruff.lint.per-file-ignores]
-"src/xcoresdk_python/gello_leader.py" = ["E501"]
-"src/xcoresdk_python/gello_follower.py" = ["E501"]
-"src/xcoresdk_python/dynamixel_reader.py" = ["E501"]
+"src/xcore_sdk_python/gello_leader.py" = ["E501"]
+"src/xcore_sdk_python/gello_follower.py" = ["E501"]
+"src/xcore_sdk_python/dynamixel_reader.py" = ["E501"]

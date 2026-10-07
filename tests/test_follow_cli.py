@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from xcoresdk_python.cli import parser, validate
+from xcore_sdk_python.cli import parser, validate
 
 
 def test_follow_server_is_dry_run_by_default() -> None:

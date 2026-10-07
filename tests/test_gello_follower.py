@@ -4,8 +4,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from xcoresdk_python import gello_follower as follower
-from xcoresdk_python.gello_server import CheckedRobot, dispatch
+from xcore_sdk_python import gello_follower as follower
+from xcore_sdk_python.gello_server import CheckedRobot, dispatch
 
 
 class Limits:

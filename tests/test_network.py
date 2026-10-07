@@ -1,6 +1,6 @@
 import json
 
-from xcoresdk_python import network
+from xcore_sdk_python import network
 
 
 def test_proxy_tcp_acceptance_does_not_imply_direct_controller_connection(monkeypatch):
