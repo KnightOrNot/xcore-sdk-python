@@ -7,7 +7,10 @@ Release/**/*.so
 Release/**/*.pyd
 Release/**/xCoreSDK.dll
 
-scripts/
+scripts/*
+!scripts/start_gello_follow.sh
+config/*calib*.json
+.follow.lock
 
 # Release packaging output
 dist/

@@ -69,8 +69,19 @@ def load_sdk(directory: str | None = None) -> Any:
 
 def doctor(directory: str | None = None) -> dict[str, Any]:
     sdk = load_sdk(directory)
-    methods = ("robotInfo", "jointPos", "getRobotCfg_DHparam", "moveAppend", "stop")
+    methods = (
+        "robotInfo",
+        "jointPos",
+        "getRobotCfg_DHparam",
+        "moveAppend",
+        "stop",
+        "getRtMotionController",
+    )
     missing = [name for name in methods if not hasattr(sdk.xMateRobot, name)]
+    rt_types = ("JointPosition", "RtControllerMode")
+    missing.extend(name for name in rt_types if not hasattr(sdk, name))
+    if not hasattr(sdk.MotionControlMode, "RtCommandMode"):
+        missing.append("MotionControlMode.RtCommandMode")
     if missing:
         raise XCoreError(f"SDK lacks required APIs: {missing}")
     return {
@@ -80,5 +91,6 @@ def doctor(directory: str | None = None) -> dict[str, Any]:
         "sdk_version": sdk.BaseRobot.sdkVersion(),
         "sdk_library": sdk.__file__,
         "required_apis": list(methods),
+        "rt_follow_apis": [*rt_types, "MotionControlMode.RtCommandMode"],
         "hardware_connected": False,
     }

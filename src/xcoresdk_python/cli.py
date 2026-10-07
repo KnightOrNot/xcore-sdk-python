@@ -108,6 +108,73 @@ def parser() -> argparse.ArgumentParser:
         else:
             motion.add_argument("--joint", type=int, choices=range(1, 7), required=True)
             motion.add_argument("--delta-deg", type=finite, required=True)
+    follow_server = sub.add_parser(
+        "follow-server",
+        parents=[common],
+        help="Run the long-lived CR7 GELLO endpoint (dry-run unless enabled)",
+    )
+    follow_server.add_argument("--host", default="127.0.0.1")
+    follow_server.add_argument("--port", type=int, default=6001)
+    follow_server.add_argument("--enable-motion", action="store_true")
+    follow_server.add_argument("--yes", action="store_true")
+    follow_server.add_argument("--state-hz", type=finite, default=25.0)
+    follow_server.add_argument("--max-speed-deg", type=finite, default=3.0)
+    follow_server.add_argument("--accel-deg-s2", type=finite, default=40.0)
+    follow_server.add_argument("--stale-timeout", type=finite, default=1.0)
+    follow_server.add_argument("--gate-deg", type=finite, default=17.1887)
+    follow_server.add_argument("--quiet", action="store_true")
+
+    follow = sub.add_parser(
+        "follow", parents=[common], help="Read GELLO leader and stream six CR7 joints"
+    )
+    follow.add_argument("--host", default="127.0.0.1", help="follow-server host")
+    follow.add_argument("--port", type=int, default=6001)
+    follow.add_argument(
+        "--serial",
+        default="/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTB4C7PQ-if00-port0",
+    )
+    follow.add_argument("--baudrate", type=int, default=57600)
+    follow.add_argument("--calib", type=Path, default=Path("config/cr7_calib.json"))
+    follow.add_argument("--hz", type=finite, default=50.0)
+    follow.add_argument("--gate-deg", type=finite, default=17.1887)
+    follow.add_argument("--dry-run", action="store_true")
+    follow.add_argument("--allow-uncalibrated", action="store_true")
+    follow.add_argument("--yes", action="store_true")
+
+    follow_check = sub.add_parser(
+        "follow-check",
+        parents=[common],
+        help="Validate calibration and read the leader once; no CR7 SDK session",
+    )
+    follow_check.add_argument(
+        "--serial",
+        default="/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTB4C7PQ-if00-port0",
+    )
+    follow_check.add_argument("--baudrate", type=int, default=57600)
+    follow_check.add_argument(
+        "--calib", type=Path, default=Path("config/cr7_calib.json")
+    )
+
+    calibration = sub.add_parser(
+        "follow-calibrate",
+        parents=[common],
+        help="Create read-only single-pose leader offsets; requires matching poses",
+    )
+    calibration.add_argument(
+        "--serial",
+        default="/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTB4C7PQ-if00-port0",
+    )
+    calibration.add_argument("--baudrate", type=int, default=57600)
+    calibration.add_argument(
+        "--ref-current",
+        action="store_true",
+        required=True,
+        help="Declare that the leader is already posed like current CR7",
+    )
+    calibration.add_argument("--signs", type=int, nargs=6, default=[1, 1, 1, 1, 1, 1])
+    calibration.add_argument("--samples", type=int, default=30)
+    calibration.add_argument("--interval", type=finite, default=0.03)
+    calibration.add_argument("--save", type=Path, default=Path("config/cr7_calib.json"))
     network = sub.add_parser(
         "network",
         parents=[common],
@@ -159,6 +226,31 @@ def validate(args: argparse.Namespace, root: argparse.ArgumentParser) -> None:
             root.error("--address must be an IPv4 address with prefix length")
         if str(address.ip) == args.ip:
             root.error("The PC address must differ from the robot IP")
+    if args.command == "follow-server":
+        if (
+            args.port < 1
+            or args.port > 65535
+            or min(
+                args.state_hz,
+                args.max_speed_deg,
+                args.accel_deg_s2,
+                args.stale_timeout,
+                args.gate_deg,
+            )
+            <= 0
+        ):
+            root.error("follow-server port and motion/watchdog values must be positive")
+        if args.max_speed_deg > 75:
+            root.error("--max-speed-deg is limited to 75 deg/s")
+    if args.command == "follow":
+        if args.port < 1 or args.port > 65535 or min(args.hz, args.gate_deg) <= 0:
+            root.error("follow port, frequency and alignment gate must be positive")
+        if not args.dry_run and args.allow_uncalibrated:
+            root.error("--allow-uncalibrated is only allowed with --dry-run")
+    if args.command == "follow-calibrate" and (args.samples < 2 or args.interval <= 0):
+        root.error("calibration needs at least two samples and a positive interval")
+    if args.command == "follow-calibrate" and args.save.exists():
+        root.error("--save already exists; choose a new calibration file")
 
 
 def terminate(process: subprocess.Popen) -> None:
@@ -227,6 +319,28 @@ def main(argv: list[str] | None = None) -> int:
     root = parser()
     args = root.parse_args(argv)
     validate(args, root)
+    if args.command in ("follow-server", "follow", "follow-calibrate", "follow-check"):
+        try:
+            if args.command == "follow-server":
+                from .gello_server import run_server
+
+                return run_server(args)
+            if args.command == "follow":
+                from .gello_client import run_client
+
+                return run_client(args)
+            if args.command == "follow-check":
+                from .calibration import run_check
+
+                return run_check(args)
+            from .calibration import calibrate
+
+            return calibrate(args)
+        except KeyboardInterrupt:
+            return 130
+        except Exception as exc:
+            print(f"xcore {args.command}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 1
     options = vars(args).copy()
     options.pop("output")
     try:

@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+# Coordinate the package CLI, using the AgileX controller launcher layout.
+set -Eeuo pipefail
+
+sdk_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+xcore=(uv run --locked --project "$sdk_dir" xcore)
+robot_ip="${XCORE_ROBOT_IP:-192.168.2.160}"
+local_ip="${XCORE_LOCAL_IP:-192.168.2.100}"
+gello_port="${XCORE_GELLO_PORT:-/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTB4C7PQ-if00-port0}"
+calib="$sdk_dir/config/cr7_calib.json"
+server_port=6001
+hz=50
+max_speed_deg=3
+enable_motion=false
+assume_yes=false
+server_pid=""
+client_pid=""
+session_dir=""
+
+usage() {
+    cat <<'EOF'
+用法：./start_gello_follow.sh [选项]
+
+默认只读预览；--enable-motion 才进入六轴真机跟随。
+  --ip IP              CR7 IP，默认 192.168.2.160
+  --local-ip IP        本机有线 IP，默认 192.168.2.100（必须已配置）
+  --gello-port PATH    GELLO 串口
+  --calib FILE         现场标定 JSON，默认 xcoresdk-python/config/cr7_calib.json
+  --port PORT          本机 ZMQ 端口，默认 6001
+  --hz HZ              主臂读取／目标发送频率，默认 50 Hz
+  --max-speed-deg V    CR7 跟随关节速度上限，默认 3 °/s
+  --enable-motion      启用实际跟随（否则 dry-run）
+  --yes                跳过启用运动的交互确认
+  -h, --help           显示帮助
+EOF
+}
+
+fail() { echo "错误：$*" >&2; exit 1; }
+
+stop_group() {
+    local task_pid="$1"
+    [[ -n "$task_pid" ]] || return 0
+    if kill -0 -- "-$task_pid" 2>/dev/null; then
+        kill -TERM -- "-$task_pid" 2>/dev/null || true
+        for ((attempt=0; attempt<150; attempt++)); do
+            kill -0 -- "-$task_pid" 2>/dev/null || break
+            sleep 0.1
+        done
+        if kill -0 -- "-$task_pid" 2>/dev/null; then
+            echo "进程 $task_pid 未及时结束，正在终止；请核对示教器状态。" >&2
+            kill -KILL -- "-$task_pid" 2>/dev/null || true
+        fi
+    fi
+    wait "$task_pid" 2>/dev/null || true
+}
+
+cleanup() {
+    local exit_code=$?
+    trap - EXIT INT TERM
+    # Stop leader targets first, then allow the RT server to finish its loop.
+    stop_group "$client_pid"
+    stop_group "$server_pid"
+    [[ -z "$session_dir" ]] || echo "服务端日志：$session_dir/server.log"
+    exit "$exit_code"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+while (( $# > 0 )); do
+    case "$1" in
+        --ip) robot_ip="${2:?--ip 缺少地址}"; shift 2 ;;
+        --local-ip) local_ip="${2:?--local-ip 缺少地址}"; shift 2 ;;
+        --gello-port) gello_port="${2:?--gello-port 缺少路径}"; shift 2 ;;
+        --calib) calib="${2:?--calib 缺少路径}"; shift 2 ;;
+        --port) server_port="${2:?--port 缺少端口}"; shift 2 ;;
+        --hz) hz="${2:?--hz 缺少数值}"; shift 2 ;;
+        --max-speed-deg) max_speed_deg="${2:?--max-speed-deg 缺少数值}"; shift 2 ;;
+        --enable-motion) enable_motion=true; shift ;;
+        --yes) assume_yes=true; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage >&2; fail "未知参数：$1" ;;
+    esac
+done
+
+for task_command in uv flock setsid; do
+    command -v "$task_command" >/dev/null || fail "未安装 $task_command"
+done
+[[ -r "$calib" ]] || fail "缺少可读标定文件：$calib；先运行 xcore follow-calibrate"
+[[ -r "$gello_port" && -w "$gello_port" ]] || fail "GELLO 串口不存在或无读写权限：$gello_port"
+
+# Only the launcher owns the descriptor; its child processes must not inherit it.
+exec 9>"$sdk_dir/.follow.lock"
+flock -n 9 || fail "已有跟随启动流程正在运行"
+
+# Parse all motion/network options before connecting to CR7 or opening the serial port.
+uv run --locked --project "$sdk_dir" python - "$robot_ip" "$local_ip" "$server_port" "$hz" "$max_speed_deg" <<'PY'
+import sys
+from xcoresdk_python.cli import parser, validate
+root = parser()
+server = root.parse_args(["follow-server", "--ip", sys.argv[1], "--local-ip", sys.argv[2],
+                         "--port", sys.argv[3], "--max-speed-deg", sys.argv[5]])
+validate(server, root)
+client = root.parse_args(["follow", "--port", sys.argv[3], "--hz", sys.argv[4]])
+validate(client, root)
+PY
+
+echo "[1/3] 检查 SDK、标定与 GELLO 只读反馈"
+"${xcore[@]}" doctor 9>&-
+"${xcore[@]}" follow-check --serial "$gello_port" --calib "$calib" 9>&-
+if [[ "$enable_motion" == true && "$assume_yes" != true ]]; then
+    read -r -p "将进行 CR7 六轴跟随；确认现场安全，输入 y 继续：" answer
+    [[ "$answer" == y || "$answer" == yes ]] || { echo "已取消。"; exit 0; }
+fi
+
+mkdir -p "$sdk_dir/logs"
+session_dir="$(mktemp -d "$sdk_dir/logs/follow-$(date +%Y%m%d-%H%M%S)-XXXXXX")"
+server_options=()
+client_options=(--dry-run)
+if [[ "$enable_motion" == true ]]; then
+    server_options=(--enable-motion --yes)
+    client_options=(--yes)
+fi
+
+echo "[2/3] 启动独占 CR7 SDK 会话的 ZMQ 服务端"
+PYTHONUNBUFFERED=1 setsid "${xcore[@]}" follow-server \
+    --ip "$robot_ip" --local-ip "$local_ip" --port "$server_port" \
+    --max-speed-deg "$max_speed_deg" --quiet "${server_options[@]}" \
+    9>&- >"$session_dir/server.log" 2>&1 &
+server_pid=$!
+server_ready=false
+for ((attempt=0; attempt<300; attempt++)); do
+    if ! kill -0 "$server_pid" 2>/dev/null; then
+        cat "$session_dir/server.log" >&2
+        fail "CR7 服务端启动失败"
+    fi
+    if grep -Fq 'CR7 follow server:' "$session_dir/server.log"; then
+        server_ready=true
+        break
+    fi
+    sleep 0.1
+done
+[[ "$server_ready" == true ]] || { cat "$session_dir/server.log" >&2; fail "服务端 30 秒内未就绪"; }
+cat "$session_dir/server.log"
+
+echo "[3/3] 启动 GELLO 客户端；按 Ctrl+C 停止客户端和服务端"
+PYTHONUNBUFFERED=1 setsid "${xcore[@]}" follow --port "$server_port" \
+    --serial "$gello_port" --calib "$calib" --hz "$hz" "${client_options[@]}" 9>&- &
+client_pid=$!
+wait "$client_pid"

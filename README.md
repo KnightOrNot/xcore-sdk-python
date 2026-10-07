@@ -50,6 +50,65 @@ uv run xcore status
 
 SDK 建连可能重置运动相关状态，断开连接可能停止已有运动。状态查询应在机械臂空闲、没有其他 SDK 控制会话时执行。
 
+## 六轴示教臂跟随：一个脚本启动
+
+工程组织以相邻 AgileX 项目为参考：顶层脚本管理设备预检、单实例锁、子进程、日志和退出；CLI、GELLO 客户端、ZMQ 服务端、CR7 驱动分别放在包内。CR7 的实时接口和回调平滑策略参考 `../gello for CR7`。
+
+### 1. 首次标定
+
+连接 GELLO 串口，将两臂摆到相同关节姿态并保持不动。只读取现场参考姿态，不发送运动目标：
+
+```bash
+uv run xcore follow-calibrate --ref-current \
+  --serial /dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTB4C7PQ-if00-port0 \
+  --save config/cr7_calib.json
+```
+
+标定文件不纳入 Git，已有文件不会被覆盖。单姿态标定无法自动判断轴方向；默认六轴方向均为 `+1`，若现场方向不同，用 `--signs S1 S2 S3 S4 S5 S6` 指定六个 `+1`／`-1`，再重新标定并逐轴核对 dry-run。完整帮助：`uv run xcore follow-calibrate --help`。
+
+### 2. 预览，再启动跟随
+
+在 SDK 仓库根目录运行：
+
+```bash
+# 只读预览主臂映射与从臂反馈
+./scripts/start_gello_follow.sh
+
+# 启用实际六轴跟随，启动时输入 y 确认
+./scripts/start_gello_follow.sh --enable-motion
+```
+
+在上一级 xcore 工作区也可直接使用 `./start_gello_follow.sh`。无需同时开两个终端。脚本先运行离线参数检查、`doctor` 和只读 `follow-check`，然后启动服务端并等待就绪，最后启动主臂客户端。服务端独占一个 SDK 连接；跟随期间不要另开 `status`、`power`、`movej` 等连接同一机械臂的命令。
+
+| 脚本参数 | 用途／默认值 |
+| --- | --- |
+| `--ip` | CR7 地址；`XCORE_ROBOT_IP` 或 `192.168.2.160` |
+| `--local-ip` | 已配置的本机有线地址；`XCORE_LOCAL_IP` 或 `192.168.2.100` |
+| `--gello-port` | 示教臂串口；`XCORE_GELLO_PORT` 或上述 FTDI 路径 |
+| `--calib` | 标定文件；SDK 仓库 `config/cr7_calib.json` |
+| `--hz` | 主臂读取与发送频率；`50` Hz |
+| `--port` | 本机 ZMQ 端口；`6001`，绑定 `127.0.0.1` |
+| `--max-speed-deg` | 跟随关节速度上限；`3` °/s |
+| `--enable-motion` | 启用实际运动；默认只读预览 |
+| `--yes` | 跳过已确认现场条件后的交互确认 |
+
+跟随速度与 `movej --speed 1000` 是两个独立参数，单位分别为 °/s 和 mm/s。启动时选择与实际关节反馈最近的 2π 分支；初始误差超过默认 `17.1887°` 对齐阈值时拒绝运动，不自动把从臂移到主臂位置。客户端目标以 50 Hz 发送，驱动通过 SDK RT 回调平滑下发，带速度、加速度、软限位和断流检查。
+
+按 **Ctrl+C** 结束。脚本先结束主臂客户端，再请求服务端关闭；驱动请求 RT 回调结束、`stopMove`、恢复 NRT／manual 并断开连接。不会自动回零或下电；退出后核对示教器状态。服务端日志留在 `logs/follow-*/server.log`。
+
+### 3. 独立 CLI 入口（调试）
+
+| 指令 | 功能 | 示例 |
+| --- | --- | --- |
+| `follow-check` | 只读采样示教臂并校验标定，不连接 CR7 | `uv run xcore follow-check --calib config/cr7_calib.json` |
+| `follow-calibrate` | 用两臂相同参考姿态生成六轴零位偏移 | `uv run xcore follow-calibrate --ref-current --save config/cr7_calib.json` |
+| `follow-server` | 独占 CR7 SDK 会话，通过 ZMQ 提供状态和目标接口 | `uv run xcore follow-server --local-ip 192.168.2.100` |
+| `follow` | 读取 GELLO，向服务端发送六轴目标或只读预览 | `uv run xcore follow --dry-run --calib config/cr7_calib.json` |
+
+`follow-server` 默认只读；真机调试时需显式加 `--enable-motion`，客户端 `follow` 省略 `--dry-run`。这两条长驻命令输出运行日志，区别于一次性查询的 JSON 输出。通常使用上面的脚本统一管理。
+
+此流程覆盖六轴跟随，夹爪联动与仿真显示未实现。依赖已锁定并安装，标定／驱动与脚本进程管理已通过离线测试；当前 Python 3.11 + SDK 0.7.1 的真机实时启停及连续跟随仍待现场验收。首次现场测试应从核对映射、静止启停和短行程低速跟随开始。
+
 ## 指令介绍
 
 ### 1. 基本用法与公共参数
@@ -62,7 +121,7 @@ uv run xcore --help
 uv run xcore move-joint --help
 ```
 
-命令输出 JSON；成功退出码为 `0`，执行失败为 `1`，参数错误为 `2`，等待超时为 `124`，键盘中断为 `130`。`--output` 仅保存成功结果，自动创建父目录，不覆盖已有文件。
+一次性 SDK 查询与控制命令输出 JSON；成功退出码为 `0`，执行失败为 `1`，参数错误为 `2`，等待超时为 `124`，键盘中断为 `130`。`--output` 仅保存成功结果，自动创建父目录，不覆盖已有文件。
 
 | 参数 | 含义 | 默认值 |
 | --- | --- | --- |
@@ -184,4 +243,4 @@ uv run xcore mode manual
 
 ## 实测记录与当前范围
 
-状态日志保存在本机 `logs/direct_sdk_read_20261004.json` 和 `logs/cli_status_20261004.json`；原生运动日志为 `logs/native_motion_test_20261004.json` 和 `logs/native_motion_return_20261004.json`，测试脚本同目录留存。首次使用 0.05° 全轴容差超时，返回测试使用框架默认 0.2° 容差成功，详见开发文档。日志目录不纳入 Git。目前框架覆盖六轴状态查询、网络诊断和非实时关节运动接口；ROS2 仿真、连续实时跟随及夹爪适配尚未实现。
+状态日志保存在本机 `logs/direct_sdk_read_20261004.json` 和 `logs/cli_status_20261004.json`；原生运动日志为 `logs/native_motion_test_20261004.json` 和 `logs/native_motion_return_20261004.json`，测试脚本同目录留存。首次使用 0.05° 全轴容差超时，返回测试使用框架默认 0.2° 容差成功，详见开发文档。日志目录不纳入 Git。目前框架覆盖六轴状态查询、网络诊断、非实时运动和六轴示教臂跟随；夹爪联动与仿真显示未接入。跟随驱动已接入，但当前 SDK／现场组合的实时回调仍需按文档完成受控实机验证。

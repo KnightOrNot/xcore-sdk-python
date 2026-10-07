@@ -7,7 +7,11 @@ authors = [
     { name = "RightOrNot", email = "jue1251665735@outlook.com" }
 ]
 requires-python = ">=3.11,<3.12"
-dependencies = []
+dependencies = [
+    "dynamixel-sdk>=3.7",
+    "numpy>=1.24",
+    "pyzmq>=27.0",
+]
 
 [project.scripts]
 xcore = "xcoresdk_python.cli:main"
@@ -28,3 +32,8 @@ extend-exclude = ["example", "Release"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/xcoresdk_python/gello_leader.py" = ["E501"]
+"src/xcoresdk_python/gello_follower.py" = ["E501"]
+"src/xcoresdk_python/dynamixel_reader.py" = ["E501"]

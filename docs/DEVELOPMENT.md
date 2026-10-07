@@ -1,6 +1,6 @@
 # xCore SDK 项目搭建与开发
 
-首次使用见 [README](../README.md)。本文命令默认在 `xcoresdk-python/` 目录执行。当前框架参考相邻 `agilexrobotics` 项目的 CLI、连接层、驱动层和测试组织方式，通信采用 xCore SDK 的以太网接口。
+首次使用见 [README](../README.md)。本文命令默认在 `xcoresdk-python/` 目录执行。工程结构以 `../../agilex/agilex-controller` 的跟随启动流程及其 `agilexrobotics` 包的 CLI、连接层、驱动层和测试组织为参考；`../../gello for CR7` 用于参考 CR7 SDK 接口与实时运动控制。通信采用 xCore SDK 的以太网接口。
 
 ## 环境与安装
 
@@ -12,7 +12,7 @@ uv run xcore doctor
 uv run xcore check
 ```
 
-如果已有 pyenv 解释器，可用 `uv sync --frozen --python /home/knight/.pyenv/versions/3.11.16/bin/python`。`.python-version` 指定 3.11，`pyproject.toml` 当前要求 `>=3.11,<3.12`，`uv.lock` 锁定依赖。运行库无需额外 Python 依赖，开发组使用 pytest 和 Ruff；默认 `uv sync` 安装开发组。
+如果已有 pyenv 解释器，可用 `uv sync --python /home/knight/.pyenv/versions/3.11.16/bin/python`。`.python-version` 指定 3.11，`pyproject.toml` 当前要求 `>=3.11,<3.12`。跟随功能增加 numpy、pyzmq 和 Dynamixel SDK 依赖；依赖变更后使用 `uv lock` 更新锁文件，再用 `uv sync --frozen` 安装锁定版本。开发组使用 pytest 和 Ruff。
 
 厂商 `.so/.pyd/.dll` 通过 Release 单独分发，不在 Git 中。默认搜索路径为：
 
@@ -196,7 +196,7 @@ DH 返回 28 项；前 24 项整理为六行 `rows`，尾部四项零值保留�
 
 SDK 原生调用可能阻塞，CLI 到总时限后终止工作进程，必要时强制结束。中断清理及 `stop` 都属于尽力执行，网络断开或原生调用卡住时不能保证机器人停止。一次性 CLI 也不适合作为外部控制器运行时的状态镜像服务，持续服务需复用单一连接。
 
-2026-10-04 验证记录：原生 SDK 的完整反馈读取成功；CLI `status`、`dh --nominal`、`limits` 和网络诊断成功；离线测试覆盖额外数组槽位、数据错误、条件拒绝、到位与超时处理。原生 SDK 的模式切换、上电、非实时运动、停止和下电已随后实测成功；CLI `mode automatic` 和 `power on` 也已实机验证成功：手动模式直接上电返回 -514，切换自动模式后上电成功。随后 CLI `move-joint` 和 `movej` 已使用新默认速度完成 J6 +1°／返回原始位置验证；RCI 实时控制／ROS2 驱动仍未实机验证。
+2026-10-04 验证记录：原生 SDK 的完整反馈读取成功；CLI `status`、`dh --nominal`、`limits` 和网络诊断成功；离线测试覆盖额外数组槽位、数据错误、条件拒绝、到位与超时处理。原生 SDK 的模式切换、上电、非实时运动、停止和下电已随后实测成功；CLI `mode automatic` 和 `power on` 也已实机验证成功：手动模式直接上电返回 -514，切换自动模式后上电成功。随后 CLI `move-joint` 和 `movej` 已使用新默认速度完成 J6 +1°／返回原始位置验证；实时跟随仍未实机验证。
 
 ## 2026-10-04 原生 SDK 运动实测
 
@@ -270,4 +270,63 @@ uv run xcore check --fix
 
 测试采用假 SDK，不访问网卡或控制机械臂；进程超时测试使用真实睡眠子进程核查清理。增加命令时先实现连接／驱动方法，再在 `commands.py` 分派、`cli.py` 定义参数，并针对错误和行为边界补测试。新硬件方法应记录实机验证状态。
 
-ROS2 状态镜像可基于 `joints()['rad']` 适配 `JointState`，但准确的旧款 R850 URDF、关节名称及方向仍需核对。GELLO、夹爪和连续实时跟随需要独立适配，不应直接复制相邻项目的 SocketCAN 或关节限位常量。
+夹爪单独适配尚未实现。跟随使用 CR7 以太网 SDK；AgileX 的 SocketCAN 通信和关节配置不用于本项目。
+
+## 六轴示教臂跟随的工程组织
+
+```text
+xcore/start_gello_follow.sh                 工作区便捷入口
+  → xcoresdk-python/scripts/start_gello_follow.sh
+      → uv run --locked --project ... xcore doctor / follow-check
+      → 后台 follow-server                 独占 CR7 SDK 会话
+      → follow 客户端                      读取 GELLO 并发目标
+      → 退出：先停客户端，再停服务端
+```
+
+脚本参考 AgileX 控制项目的预检、`flock`、`setsid`、日志、启动等待和退出清理。脚本只做编排，设备协议与运动策略留在 Python 包；没有移植 AgileX 的机械臂归位动作或 CAN 驱动。SDK 仓库中保留完整脚本实现，单独克隆该仓库即可运行。
+
+| 模块 | 职责 |
+| --- | --- |
+| `scripts/start_gello_follow.sh` | 参数、串口／依赖预检、单实例锁、子进程组、启动等待、日志与清理 |
+| `cli.py` | 统一 `xcore` 子命令、离线参数校验及错误出口 |
+| `calibration.py` | 标定文件校验、只读预检、同姿态采样与圆周均值零位标定 |
+| `dynamixel_reader.py` | 六轴 Dynamixel ID、只读串口采样与角度解缠 |
+| `gello_leader.py` | 主臂偏移／方向映射、2π 分支和读取失败处理 |
+| `gello_client.py` | ZMQ 客户端跟随循环、初始姿态对齐、dry-run 预览 |
+| `gello_server.py` | GELLO 四方法协议、单个 SDK 会话、错误码检查与长驻服务生命周期 |
+| `gello_follower.py` | CR7 RT 回调、平滑限速／限加速度、软限位交集及看门狗 |
+
+ZMQ 采用 GELLO 的 `num_dofs`、`get_joint_state`、`command_joint_state`、`get_observations` 四方法，使用 pickle 编解码并只绑定 localhost。它是本机可信进程间接口，不应开放给不可信网络。客户端请求超时默认 2 秒；服务端状态采样由伺服线程完成，回调只使用内存目标。`follow-server` 持有长驻连接，不经过一次性 CLI 的 worker；现场不得同时运行另外的 SDK 控制会话。
+
+### 标定和启动
+
+```bash
+uv sync --frozen --python 3.11
+uv run xcore doctor
+# 两臂摆到相同关节姿态并保持不动；方向按现场确认
+uv run xcore follow-calibrate --ref-current --save config/cr7_calib.json
+./scripts/start_gello_follow.sh
+./scripts/start_gello_follow.sh --enable-motion
+```
+
+现场默认串口、IP、频率和速度参数见 [README](../README.md#六轴示教臂跟随一个脚本启动)。脚本先在打开设备之前解析参数，再执行 SDK 离线加载检查和标定／串口只读检查，关闭预检串口后再启动子进程。标定文件为六个有限 `joint_offsets`（弧度）、六个 `joint_signs`（±1），映射公式 `q = sign * (raw - offset)`。均值使用圆周统计，防止 0／2π 边界造成错误；采样中明显移动时拒绝保存。单姿态标定不能推断方向，需要 `--signs` 并逐轴预览核对。
+
+默认脚本只读，`--enable-motion` 才启用运动；脚本统一确认后向子命令传入 `--yes`。独立启动 CLI 时服务端和客户端各自确认。服务端首个目标还需通过对齐闸门才进入 SDK RT 模式；不会自动规划从臂到主臂姿态。
+
+脚本日志位于 `logs/follow-日期-时间-随机串/server.log`。启动失败不运行客户端；客户端报错保留其退出码。退出／信号清理先向客户端进程组发 TERM，再向服务端发 TERM，分别等待最多 15 秒，超时强制终止并提示检查控制器。单实例锁由脚本持有，子进程不继承锁描述符；该锁只约束此脚本，不能阻止手工另开的 SDK 会话。
+
+### CR7 运动策略与退出
+
+沿用同学项目的实时关节目标、平滑与看门狗思路，具体 SDK 调用按本项目接口校验。上电与进入 RT 在首个有效目标到达后发生：设置网络容忍、RT 控制模式、automatic、上电、获取 RT 控制器、滤波与当前姿态 MoveJ，然后注册 `JointPosition` 回调并非阻塞启动循环。
+
+跟随默认速度上限 3 °/s，与非实时 `movej` 的 1000 mm/s 独立。驱动使用本地保守限位与实际控制器 `PyTypeVectorArrayDouble2.content()` 软限位的交集；控制器软限位关闭或反馈异常时拒绝创建驱动。目标必须是六个有限值，超限目标裁剪到交集边界。回调按有限 dt 更新平滑输出，避免长时间间隔造成目标跳变。看门狗检查目标断流、跟踪偏差、回调停滞和控制器错误；伺服线程异常记录中止原因并尝试停止 RT。
+
+正常退出请求回调 `setFinished`、`stopMove`，恢复 NRT／manual，再断开连接；不自动回零或下电。代码避免直接阻塞调用旧参考中可能持有 GIL 的 `stopLoop`。线程异常、网络中断或强制终止时，停止属于尽力执行，需核对示教器反馈。
+
+### 验证记录和边界
+
+运行依赖 `numpy`、`pyzmq`、`dynamixel-sdk` 已解析到 `uv.lock` 并安装；新机器使用 `uv sync --frozen --python 3.11`。离线测试覆盖圆周标定、格式错误、SDK 错误码、控制器限位、非有限目标拒绝、RT 插值与异常停机，以及真实 shell 的服务端启动失败、客户端报错、信号退出和进程组清理；硬件接口均采用替身，不触发运动。
+
+当前扩展已离线检查到 `getRtMotionController`、`JointPosition`、`RtControllerMode`、`MotionControlMode.RtCommandMode`。原生 SDK 和非实时控制的实机记录见前文。新的实时跟随尚未在 CPython 3.11 + SDK 0.7.1 + 当前 CR7 上完成真机启停／连续跟随验收；同学项目实测只作为驱动实现参考。
+
+现场验收顺序：核对 IP／SDK 与串口，完成静止同姿态标定，逐轴 dry-run 核对方向和分支，再验证低速静止启停、短行程跟随及 Ctrl+C 收尾，确认后再调整速度与负载条件。此任务只接入六轴跟随；夹爪和仿真显示没有实现。
