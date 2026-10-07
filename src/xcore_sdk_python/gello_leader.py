@@ -71,6 +71,12 @@ class Cr7LeaderAgent:
             raise ValueError(
                 "指定了 gripper_id 就必须同时给 gripper_config=(开deg, 关deg)"
             )
+        if gripper_id in JOINT_IDS:
+            raise ValueError("gripper_id must differ from the six arm IDs")
+        if gripper_config is not None:
+            o, c = gripper_config
+            if not math.isfinite(o) or not math.isfinite(c) or abs(c - o) < 1e-6:
+                raise ValueError("Gripper endpoints must be finite and different")
 
         self._alpha = float(alpha)
         self._jump_guard = float(jump_guard_rad)
@@ -91,6 +97,7 @@ class Cr7LeaderAgent:
         self._n_fail = 0
         self._n_glitch = 0
         self._n_wrap = 0
+        self._frame_ticks = None
 
         # 首帧：建立解缠锚点
         r0 = self._read_single_turn()
@@ -144,14 +151,17 @@ class Cr7LeaderAgent:
     def _read_single_turn(self) -> Optional[np.ndarray]:
         """硬件读：返回 6 关节原始角 rad（0~2π 单圈），失败返回 None。不改变解缠状态。"""
         ticks = self._arm.read_ticks()
+        self._frame_ticks = ticks
         if ticks is None:
             self._n_fail += 1
             return None
         vals = [ticks.get(i) for i in JOINT_IDS]
+        if self.has_gripper:
+            vals.append(ticks.get(self._gripper_id))
         if any(v is None for v in vals):
             self._n_fail += 1
             return None
-        return np.array([ticks_to_rad(v) for v in vals], dtype=float)
+        return np.array([ticks_to_rad(v) for v in vals[:N_JOINTS]], dtype=float)
 
     def read_single_turn_rad(self) -> Optional[np.ndarray]:
         """读 6 关节**单圈**原始角 rad ∈ [0, 2π)，**不做任何解缠**。
@@ -207,7 +217,7 @@ class Cr7LeaderAgent:
                 )
             if self._last_q is None:
                 raise LeaderReadError("小臂首次读取就失败，无法确定起始姿态")
-            return self._last_q.copy()
+            return self._with_gripper(self._last_q)
 
         self._fail_since = None
         self._n_read += 1
@@ -223,11 +233,11 @@ class Cr7LeaderAgent:
                         f"已忽略该帧（累计 {self._n_glitch} 次）"
                     )
                 self._r_cont = self._last_raw.copy()
-                return (
+                return self._with_gripper(
                     self._last_q
                     if self._last_q is not None
                     else (raw - self._offsets) * self._signs
-                ).copy()
+                )
         self._last_raw = raw.copy()
 
         q = self._raw_to_q(raw)
@@ -238,21 +248,30 @@ class Cr7LeaderAgent:
         self._last_q = q
 
         if self.has_gripper:
-            g = self._gripper_from_raw()
+            g = self._gripper_from_raw(self._frame_ticks)
             if g is not None:
                 self._last_g = g
-            gv = 0.0 if self._last_g is None else self._last_g
-            return np.concatenate([q, [gv]])
+        return self._with_gripper(q)
+
+    def _with_gripper(self, q: np.ndarray) -> np.ndarray:
+        if self.has_gripper:
+            if self._last_g is None:
+                raise LeaderReadError("No valid gripper sample available")
+            return np.concatenate([q, [self._last_g]])
         return q.copy()
 
     def _raw_to_q(self, raw: np.ndarray) -> np.ndarray:
         return (raw - self._offsets) * self._signs - 2 * math.pi * self._branch
 
-    def _gripper_from_raw(self) -> Optional[float]:
+    def _gripper_from_raw(self, ticks=None) -> Optional[float]:
         """扳机角度 → [0,1]（gello 同款归一化）。"""
         if self._gripper_id is None or self._gripper_open_close is None:
             return None
-        r = self.read_raw_gripper_rad()
+        if ticks is None:
+            r = self.read_raw_gripper_rad()
+        else:
+            t = ticks.get(self._gripper_id)
+            r = None if t is None else ticks_to_rad(t)
         if r is None:
             return None
         o, c = self._gripper_open_close

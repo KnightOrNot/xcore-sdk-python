@@ -151,3 +151,15 @@ def test_single_instance_lock_rejects_before_opening_devices(launcher) -> None:
         result = subprocess.run(cmd, env=env, capture_output=True, timeout=8)
     assert result.returncode == 1
     assert not path.exists()
+
+
+def test_launcher_forwards_gripper_options_only_to_unified_client(launcher) -> None:
+    cmd, env, path = launcher
+    options = ["--gripper-host", "127.0.0.1", "--gripper-force", "30"]
+    result = subprocess.run(
+        cmd + options, env=env, capture_output=True, text=True, timeout=8
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    calls = read_calls(path)
+    assert "--gripper-host" not in calls[2]["args"]
+    assert calls[3]["args"][-4:] == options

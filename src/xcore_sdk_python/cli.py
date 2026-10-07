@@ -140,6 +140,20 @@ def parser() -> argparse.ArgumentParser:
     follow.add_argument("--dry-run", action="store_true")
     follow.add_argument("--allow-uncalibrated", action="store_true")
     follow.add_argument("--yes", action="store_true")
+    follow.add_argument(
+        "--gripper-host", help="Enable independent gripper following at this TCP host"
+    )
+    follow.add_argument("--gripper-port", type=int, default=5005)
+    follow.add_argument("--gripper-id", type=int, default=7)
+    follow.add_argument("--gripper-open-deg", type=finite, default=194.8)
+    follow.add_argument("--gripper-close-deg", type=finite, default=153.0)
+    follow.add_argument("--gripper-open-pos", type=int, default=0)
+    follow.add_argument("--gripper-closed-pos", type=int, default=255)
+    follow.add_argument("--gripper-hz", type=finite, default=5.0)
+    follow.add_argument("--gripper-speed", type=int, default=150)
+    follow.add_argument("--gripper-force", type=int, default=0)
+    follow.add_argument("--gripper-timeout", type=finite, default=0.75)
+    follow.add_argument("--gripper-stale-timeout", type=finite, default=1.5)
 
     follow_check = sub.add_parser(
         "follow-check",
@@ -247,6 +261,30 @@ def validate(args: argparse.Namespace, root: argparse.ArgumentParser) -> None:
             root.error("follow port, frequency and alignment gate must be positive")
         if not args.dry_run and args.allow_uncalibrated:
             root.error("--allow-uncalibrated is only allowed with --dry-run")
+        if not 1 <= args.gripper_port <= 65535 or not 7 <= args.gripper_id <= 252:
+            root.error("Invalid gripper port or ID (arm IDs 1..6 are reserved)")
+        if args.gripper_open_deg == args.gripper_close_deg:
+            root.error("Gripper angle endpoints must differ")
+        if (
+            any(
+                not 0 <= value <= 255
+                for value in (
+                    args.gripper_open_pos,
+                    args.gripper_closed_pos,
+                    args.gripper_speed,
+                    args.gripper_force,
+                )
+            )
+            or args.gripper_open_pos == args.gripper_closed_pos
+        ):
+            root.error("Gripper byte values must be 0..255 and endpoints must differ")
+        if (
+            not 0 < args.gripper_hz <= 10
+            or args.gripper_timeout <= 0
+            or not 0.5 <= args.gripper_stale_timeout <= 10
+            or args.gripper_stale_timeout <= 1 / args.gripper_hz + args.gripper_timeout
+        ):
+            root.error("Gripper stale timeout must exceed period + request timeout")
     if args.command == "follow-calibrate" and (args.samples < 2 or args.interval <= 0):
         root.error("calibration needs at least two samples and a positive interval")
     if args.command == "follow-calibrate" and args.save.exists():

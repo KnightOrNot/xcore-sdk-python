@@ -16,6 +16,7 @@ assume_yes=false
 server_pid=""
 client_pid=""
 session_dir=""
+gripper_options=()
 
 usage() {
     cat <<'EOF'
@@ -31,6 +32,14 @@ usage() {
   --max-speed-deg V    CR7 跟随关节速度上限，默认 3 °/s
   --enable-motion      启用实际跟随（否则 dry-run）
   --yes                跳过启用运动的交互确认
+  --gripper-host HOST  同时跟随外接夹爪；同机服务使用 127.0.0.1
+  --gripper-port PORT  夹爪 TCP 端口，默认 5005
+  --gripper-id ID      GELLO 扳机 ID，默认 7
+  --gripper-open-deg V / --gripper-close-deg V   扳机角度端点，默认 194.8 / 153
+  --gripper-open-pos V / --gripper-closed-pos V  实际夹爪行程端点，默认 0 / 255
+  --gripper-hz HZ      夹爪更新频率，默认 5 Hz（六轴仍为 50 Hz）
+  --gripper-speed V / --gripper-force V         夹爪速度／力度，默认 150 / 0
+  --gripper-timeout V / --gripper-stale-timeout V 请求超时／断流超时，默认 0.75 / 1.5 s
   -h, --help           显示帮助
 EOF
 }
@@ -78,6 +87,9 @@ while (( $# > 0 )); do
         --max-speed-deg) max_speed_deg="${2:?--max-speed-deg 缺少数值}"; shift 2 ;;
         --enable-motion) enable_motion=true; shift ;;
         --yes) assume_yes=true; shift ;;
+        --gripper-host|--gripper-port|--gripper-id|--gripper-open-deg|--gripper-close-deg|--gripper-open-pos|--gripper-closed-pos|--gripper-hz|--gripper-speed|--gripper-force|--gripper-timeout|--gripper-stale-timeout)
+            [[ $# -ge 2 ]] || fail "$1 缺少参数"
+            gripper_options+=("$1" "$2"); shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; fail "未知参数：$1" ;;
     esac
@@ -94,14 +106,14 @@ exec 9>"$sdk_dir/.follow.lock"
 flock -n 9 || fail "已有跟随启动流程正在运行"
 
 # Parse all motion/network options before connecting to CR7 or opening the serial port.
-uv run --locked --project "$sdk_dir" python - "$robot_ip" "$local_ip" "$server_port" "$hz" "$max_speed_deg" <<'PY'
+uv run --locked --project "$sdk_dir" python - "$robot_ip" "$local_ip" "$server_port" "$hz" "$max_speed_deg" "${gripper_options[@]}" <<'PY'
 import sys
 from xcore_sdk_python.cli import parser, validate
 root = parser()
 server = root.parse_args(["follow-server", "--ip", sys.argv[1], "--local-ip", sys.argv[2],
                          "--port", sys.argv[3], "--max-speed-deg", sys.argv[5]])
 validate(server, root)
-client = root.parse_args(["follow", "--port", sys.argv[3], "--hz", sys.argv[4]])
+client = root.parse_args(["follow", "--port", sys.argv[3], "--hz", sys.argv[4], *sys.argv[6:]])
 validate(client, root)
 PY
 
@@ -109,7 +121,7 @@ echo "[1/3] 检查 SDK、标定与 GELLO 只读反馈"
 "${xcore[@]}" doctor 9>&-
 "${xcore[@]}" follow-check --serial "$gello_port" --calib "$calib" 9>&-
 if [[ "$enable_motion" == true && "$assume_yes" != true ]]; then
-    read -r -p "将进行 CR7 六轴跟随；确认现场安全，输入 y 继续：" answer
+    read -r -p "将启用跟随（含已配置的夹爪）；确认现场安全，输入 y 继续：" answer
     [[ "$answer" == y || "$answer" == yes ]] || { echo "已取消。"; exit 0; }
 fi
 
@@ -145,6 +157,7 @@ cat "$session_dir/server.log"
 
 echo "[3/3] 启动 GELLO 客户端；按 Ctrl+C 停止客户端和服务端"
 PYTHONUNBUFFERED=1 setsid "${xcore[@]}" follow --port "$server_port" \
-    --serial "$gello_port" --calib "$calib" --hz "$hz" "${client_options[@]}" 9>&- &
+    --serial "$gello_port" --calib "$calib" --hz "$hz" \
+    "${client_options[@]}" "${gripper_options[@]}" 9>&- &
 client_pid=$!
 wait "$client_pid"

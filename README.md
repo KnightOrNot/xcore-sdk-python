@@ -107,6 +107,47 @@ uv run xcore-sdk-python follow-calibrate --ref-current \
 
 `follow-server` 默认只读；真机调试时需显式加 `--enable-motion`，客户端 `follow` 省略 `--dry-run`。这两条长驻命令输出运行日志，区别于一次性查询的 JSON 输出。通常使用上面的脚本统一管理。
 
+## CR7 六轴与外接夹爪同时跟随
+
+先在夹爪 USB/RS485 所在电脑启动更新后的 `xcore-gripper-2F85` 服务。
+在控制器目录运行 `./start_gripper.sh --serial-port <夹爪串口>`，将占位符替换为
+实际夹爪适配器路径。该串口与 GELLO 串口不同；服务启动会执行夹爪激活。
+
+同机服务使用 `127.0.0.1`；服务在另一台电脑时填写那台电脑的地址：
+
+```bash
+# 只读预览六轴、主臂闭合度，并检查夹爪服务；不发送运动指令
+./scripts/start_gello_follow.sh --gripper-host 127.0.0.1
+
+# 对齐姿态并核对标定后，启用六轴与夹爪的同时跟随
+./scripts/start_gello_follow.sh --gripper-host 127.0.0.1 --enable-motion
+```
+
+同一个客户端进程每帧同步读取 ID 1～7。六轴仍通过原 ZMQ/xCore SDK 链路发送，
+第七项是夹爪闭合度（0=全开，1=全闭），交给独立 TCP 工作线程。
+默认六轴读取/发送 50 Hz，夹爪最多 5 Hz；工作线程只保留最新目标，不积压历史动作。
+夹爪服务的 `set_target` 等待串口指令与一次反馈，不等待机械运动完成，因此能在运动中改目标。
+
+扳机默认全开 194.8°、全闭 153°，须按实测确认；夹爪行程、速度和力度可单独设置：
+
+```bash
+./scripts/start_gello_follow.sh --gripper-host 127.0.0.1 --enable-motion \
+  --gripper-open-deg 194.8 --gripper-close-deg 153 \
+  --gripper-open-pos 2 --gripper-closed-pos 230 \
+  --gripper-speed 150 --gripper-force 30
+```
+
+上面的实际夹爪端点是示例，需按本机行程调整；默认协议端点为 0/255，力度为 0。
+`--gripper-port` 默认 5005。直接使用 `xcore-sdk-python follow` 时也支持相同参数。
+不指定 `--gripper-host` 时保持原六轴模式。跟随期间不要同时运行仿真/`read`
+来读取同一 GELLO 串口，也不要使用手动夹爪运动命令。
+
+夹爪工作线程故障会使统一客户端退出，CR7 原有断流保护停止跟随；Ctrl+C/SIGTERM
+退出时发送夹爪 `stop`（停止手指，不复位或自动释放）。服务端另有默认 1.5 s 的断流看门狗，
+停止请求不可达时由该看门狗尝试停止；串口事务可能延迟停止，软件保护不能代替硬件急停。
+看门狗故障会锁定夹爪跟随，重启夹爪服务或显式调用 SDK `stop()` 后才能重新进入。
+已完成离线分流、协议、超时与退出测试；真机的连续跟随和停止效果尚待验收。
+
 此流程覆盖六轴跟随，夹爪联动与仿真显示未实现。依赖已锁定并安装，标定／驱动与脚本进程管理已通过离线测试；当前 Python 3.11 + SDK 0.7.1 的真机实时启停及连续跟随仍待现场验收。首次现场测试应从核对映射、静止启停和短行程低速跟随开始。
 
 ## 指令介绍
