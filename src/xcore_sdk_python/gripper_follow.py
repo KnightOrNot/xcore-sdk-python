@@ -60,6 +60,7 @@ class GripperFollower:
         open_pos: int = 0,
         closed_pos: int = 255,
         stale_timeout: float = 1.5,
+        initial_feedback: dict[str, Any] | None = None,
     ) -> None:
         self._client = client
         self._period = 1.0 / hz
@@ -70,7 +71,7 @@ class GripperFollower:
         self._stopping = threading.Event()
         self._target: tuple[float, float] | None = None
         self._error: Exception | None = None
-        self._feedback: dict[str, Any] = {}
+        self._feedback: dict[str, Any] = dict(initial_feedback or {})
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -110,6 +111,12 @@ class GripperFollower:
                         speed=self._speed,
                         force=self._force,
                         stale_timeout=self._stale_timeout,
+                    )
+                    state = dict(
+                        state,
+                        feedback_time_ns=time.monotonic_ns(),
+                        requested_closure=closure,
+                        command_position_raw=pos,
                     )
                     with self._lock:
                         self._feedback = state

@@ -215,6 +215,7 @@ class GelloCr7Robot:
 
         # 首帧：读一次当前关节角，作为 dry-run 显示与对齐闸门的基准
         self._state = self._read_joints(required=True)
+        self._state_time_ns = time.monotonic_ns()
         self._last_state = self._state.copy()
         self._vel = np.zeros(self._dofs)
 
@@ -310,6 +311,7 @@ class GelloCr7Robot:
         with self._lock:
             return {
                 "joint_positions": self._state.copy(),
+                "joint_state_time_ns": self._state_time_ns,
                 # 差分估计：step ① 不消费，录制阶段应改为 robot.jointVel(ec)
                 "joint_velocities": self._vel.copy(),
                 # 占位：step ① 不消费；需要时用 robot.posture(CoordinateType.flangeInBase, ec) 填
@@ -375,6 +377,7 @@ class GelloCr7Robot:
             with self._lock:
                 prev = self._last_state
                 self._state = q
+                self._state_time_ns = time.monotonic_ns()
                 if prev is not None:
                     self._vel = (q - prev) / max(interval, 1e-6)
                 self._last_state = q.copy()

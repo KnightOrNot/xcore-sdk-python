@@ -44,6 +44,8 @@ def launcher(tmp_path: Path) -> tuple[list[str], dict[str, str], Path]:
         "    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
         "    while True: time.sleep(.02)\n"
         "elif command == 'follow':\n"
+        "    if os.environ.get('CHECK_STDIN'):\n"
+        "        assert sys.stdin.read(1) == 'r', 'recording stdin lost'\n"
         "    if os.environ.get('HOLD_CLIENT'):\n"
         "        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
         "        while True: time.sleep(.02)\n"
@@ -163,3 +165,26 @@ def test_launcher_forwards_gripper_options_only_to_unified_client(launcher) -> N
     calls = read_calls(path)
     assert "--gripper-host" not in calls[2]["args"]
     assert calls[3]["args"][-4:] == options
+
+
+def test_recording_client_inherits_keyboard_input(launcher) -> None:
+    cmd, env, path = launcher
+    result = subprocess.run(
+        cmd
+        + [
+            "--enable-motion",
+            "--yes",
+            "--gripper-host",
+            "127.0.0.1",
+            "--raw-data-root",
+            str(path.parent / "raw"),
+            "--start-recording",
+        ],
+        env={**env, "CHECK_STDIN": "1"},
+        input="r",
+        text=True,
+        capture_output=True,
+        timeout=8,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "--start-recording" in read_calls(path)[3]["args"]

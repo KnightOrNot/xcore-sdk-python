@@ -40,6 +40,10 @@ usage() {
   --gripper-hz HZ      夹爪更新频率，默认 5 Hz（六轴仍为 50 Hz）
   --gripper-speed V / --gripper-force V         夹爪速度／力度，默认 150 / 0
   --gripper-timeout V / --gripper-stale-timeout V 请求超时／断流超时，默认 0.75 / 1.5 s
+  --raw-data-root PATH  启用 raw episode 记录（需 --enable-motion 和 --gripper-host）
+  --task TEXT          记录任务描述
+  --start-recording    对齐后立即开始记录，否则使用 R/S/D/P/H 单键
+  --session-path-file PATH / --record-queue-size N / --record-feedback-max-age S
   -h, --help           显示帮助
 EOF
 }
@@ -87,6 +91,10 @@ while (( $# > 0 )); do
         --max-speed-deg) max_speed_deg="${2:?--max-speed-deg 缺少数值}"; shift 2 ;;
         --enable-motion) enable_motion=true; shift ;;
         --yes) assume_yes=true; shift ;;
+        --start-recording) gripper_options+=("$1"); shift ;;
+        --raw-data-root|--task|--session-path-file|--record-queue-size|--record-feedback-max-age)
+            [[ $# -ge 2 ]] || fail "$1 缺少参数"
+            gripper_options+=("$1" "$2"); shift 2 ;;
         --gripper-host|--gripper-port|--gripper-id|--gripper-open-deg|--gripper-close-deg|--gripper-open-pos|--gripper-closed-pos|--gripper-hz|--gripper-speed|--gripper-force|--gripper-timeout|--gripper-stale-timeout)
             [[ $# -ge 2 ]] || fail "$1 缺少参数"
             gripper_options+=("$1" "$2"); shift 2 ;;
@@ -106,14 +114,15 @@ exec 9>"$sdk_dir/.follow.lock"
 flock -n 9 || fail "已有跟随启动流程正在运行"
 
 # Parse all motion/network options before connecting to CR7 or opening the serial port.
-uv run --locked --project "$sdk_dir" python - "$robot_ip" "$local_ip" "$server_port" "$hz" "$max_speed_deg" "${gripper_options[@]}" <<'PY'
+uv run --locked --project "$sdk_dir" python - "$robot_ip" "$local_ip" "$server_port" "$hz" "$max_speed_deg" "$enable_motion" "${gripper_options[@]}" <<'PY'
 import sys
 from xcore_sdk_python.cli import parser, validate
 root = parser()
 server = root.parse_args(["follow-server", "--ip", sys.argv[1], "--local-ip", sys.argv[2],
                          "--port", sys.argv[3], "--max-speed-deg", sys.argv[5]])
 validate(server, root)
-client = root.parse_args(["follow", "--port", sys.argv[3], "--hz", sys.argv[4], *sys.argv[6:]])
+client = root.parse_args(["follow", "--port", sys.argv[3], "--hz", sys.argv[4], *sys.argv[7:]]
+                         + ([] if sys.argv[6] == "true" else ["--dry-run"]))
 validate(client, root)
 PY
 
@@ -158,6 +167,6 @@ cat "$session_dir/server.log"
 echo "[3/3] 启动 GELLO 客户端；按 Ctrl+C 停止客户端和服务端"
 PYTHONUNBUFFERED=1 setsid "${xcore[@]}" follow --port "$server_port" \
     --serial "$gello_port" --calib "$calib" --hz "$hz" \
-    "${client_options[@]}" "${gripper_options[@]}" 9>&- &
+    "${client_options[@]}" "${gripper_options[@]}" 9>&- <&0 &
 client_pid=$!
 wait "$client_pid"

@@ -154,6 +154,14 @@ def parser() -> argparse.ArgumentParser:
     follow.add_argument("--gripper-force", type=int, default=0)
     follow.add_argument("--gripper-timeout", type=finite, default=0.75)
     follow.add_argument("--gripper-stale-timeout", type=finite, default=1.5)
+    follow.add_argument(
+        "--raw-data-root", type=Path, help="Enable raw episode recording"
+    )
+    follow.add_argument("--session-path-file", type=Path)
+    follow.add_argument("--task", default="CR7 GELLO teleoperation")
+    follow.add_argument("--record-queue-size", type=int, default=500)
+    follow.add_argument("--record-feedback-max-age", type=finite, default=0.75)
+    follow.add_argument("--start-recording", action="store_true")
 
     follow_check = sub.add_parser(
         "follow-check",
@@ -261,6 +269,17 @@ def validate(args: argparse.Namespace, root: argparse.ArgumentParser) -> None:
             root.error("follow port, frequency and alignment gate must be positive")
         if not args.dry_run and args.allow_uncalibrated:
             root.error("--allow-uncalibrated is only allowed with --dry-run")
+        if args.raw_data_root is not None:
+            if args.dry_run or not args.gripper_host:
+                root.error("Recording requires motion following and --gripper-host")
+            if (
+                args.record_queue_size <= 0
+                or args.record_feedback_max_age <= 0
+                or not args.task.strip()
+            ):
+                root.error("Invalid recording queue, feedback age or task")
+        elif args.start_recording or args.session_path_file is not None:
+            root.error("Recording options require --raw-data-root")
         if not 1 <= args.gripper_port <= 65535 or not 7 <= args.gripper_id <= 252:
             root.error("Invalid gripper port or ID (arm IDs 1..6 are reserved)")
         if args.gripper_open_deg == args.gripper_close_deg:

@@ -148,6 +148,46 @@ uv run xcore-sdk-python follow-calibrate --ref-current \
 看门狗故障会锁定夹爪跟随，重启夹爪服务或显式调用 SDK `stop()` 后才能重新进入。
 已完成离线分流、协议、超时与退出测试；真机的连续跟随和停止效果尚待验收。
 
+## 跟随期间记录从臂实际状态
+
+控制器提供 `start_data_record.sh`，沿用普通跟随的标定、对齐、限速和退出流程，
+结束后由控制器的 `tools/convert_cr7.py` 复用原转换器写入 LeRobot 数据集；
+转换使用独立 Python 3.12，控制进程仍使用 Python 3.11。
+先启动夹爪服务，再在控制器目录运行：
+
+```bash
+./start_data_record.sh --task "pick up the object"
+# 只保留原始数据，不自动转换
+./start_data_record.sh --task "pick up the object" --skip-conversion
+```
+
+直接使用 SDK 也可记录，需先启动六轴 `follow-server` 和夹爪服务：
+
+```bash
+uv run xcore-sdk-python follow --gripper-host 127.0.0.1 \
+  --calib config/cr7_calib.json --raw-data-root data/raw --task "pick object"
+```
+
+使用 R 开始 episode、S 保存、D 丢弃、P 查看状态、H 查看帮助。
+`--start-recording` 在对齐后立即开始第一段；Ctrl+C/SIGTERM 保留未保存的
+`.jsonl.partial`，转换器只处理通过 S 保存的 `.jsonl`。
+
+每帧 raw 的 `joint_positions` 是六轴实际 SDK 反馈加实际夹爪闭合度；
+`action` 是请求的六轴目标和扳机闭合度，执行时仍由 CR7 服务限位/插值，
+夹爪由独立线程发送最新目标。记录不访问另一个 SDK 会话，也不再读一次 GELLO。
+夹爪闭合度由实际 `position_raw` 和 `--gripper-open-pos/--gripper-closed-pos`
+端点映射，不使用主臂扳机值冒充实际状态。
+
+每行还保存两路反馈时间戳、反馈年龄及夹爪原始位置。CR7 时间戳来自同机 SDK
+服务的成功读取；夹爪时间戳是客户端收到实际反馈的本机单调时间，因此异机夹爪
+服务无需共享系统时钟。SDK 记录端要求 SDK 服务同机运行。
+默认超过 `--record-feedback-max-age 0.75` 秒的反馈会中止跟随，保留不完整 episode。
+写盘使用有界异步队列，满队列或写入失败不会静默丢帧。
+
+CR7 记录格式只包含实测关节和夹爪，不记录 SDK 占位的零速度或零末端位姿。
+离线转换自动输出七维 `observation.state` / `action`，按观测时间重采样，
+另附实际采样率、反馈刷新频率和反馈年龄质量报告。
+
 此流程覆盖六轴跟随，夹爪联动与仿真显示未实现。依赖已锁定并安装，标定／驱动与脚本进程管理已通过离线测试；当前 Python 3.11 + SDK 0.7.1 的真机实时启停及连续跟随仍待现场验收。首次现场测试应从核对映射、静止启停和短行程低速跟随开始。
 
 ## 指令介绍
@@ -284,4 +324,4 @@ uv run xcore-sdk-python mode manual
 
 ## 实测记录与当前范围
 
-状态日志保存在本机 `logs/direct_sdk_read_20261004.json` 和 `logs/cli_status_20261004.json`；原生运动日志为 `logs/native_motion_test_20261004.json` 和 `logs/native_motion_return_20261004.json`，测试脚本同目录留存。首次使用 0.05° 全轴容差超时，返回测试使用框架默认 0.2° 容差成功，详见开发文档。日志目录不纳入 Git。目前框架覆盖六轴状态查询、网络诊断、非实时运动和六轴示教臂跟随；夹爪联动与仿真显示未接入。跟随驱动已接入，但当前 SDK／现场组合的实时回调仍需按文档完成受控实机验证。
+状态日志保存在本机 `logs/direct_sdk_read_20261004.json` 和 `logs/cli_status_20261004.json`；原生运动日志为 `logs/native_motion_test_20261004.json` 和 `logs/native_motion_return_20261004.json`，测试脚本同目录留存。首次使用 0.05° 全轴容差超时，返回测试使用框架默认 0.2° 容差成功，详见开发文档。日志目录不纳入 Git。目前框架覆盖六轴状态查询、网络诊断、非实时运动和六轴示教臂跟随；已接入独立夹爪联动和从臂数据记录。当前 SDK／现场组合的连续跟随、夹爪联动与数据采集仍需按文档完成受控实机验证。

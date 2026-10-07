@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import signal
 import time
 from pathlib import Path
@@ -13,6 +14,8 @@ import numpy as np
 from .calibration import load_calibration
 from .gello_server import ZmqRobotClient
 from .gripper_follow import GripperFollowClient, GripperFollower
+from .raw_recorder import RawEpisodeRecorder
+from .recording import RecordingKeyboard, handle_key, sample_from_cycle
 
 
 def run_client(args: Any) -> int:
@@ -47,6 +50,8 @@ def run_client(args: Any) -> int:
     agent = None
     client = None
     gripper = None
+    recorder = None
+    keyboard = None
     old_term = signal.signal(signal.SIGTERM, _interrupt)
     try:
         agent = Cr7LeaderAgent(
@@ -85,6 +90,11 @@ def run_client(args: Any) -> int:
                 print("Cancelled")
                 return 1
             if gripper_client is not None:
+                initial_feedback = None
+                if args.raw_data_root is not None:
+                    initial_feedback = dict(
+                        gripper_client.check(), feedback_time_ns=time.monotonic_ns()
+                    )
                 gripper = GripperFollower(
                     gripper_client,
                     hz=args.gripper_hz,
@@ -93,11 +103,48 @@ def run_client(args: Any) -> int:
                     open_pos=args.gripper_open_pos,
                     closed_pos=args.gripper_closed_pos,
                     stale_timeout=args.gripper_stale_timeout,
+                    initial_feedback=initial_feedback,
                 )
 
+        if args.raw_data_root is not None:
+            recorder = RawEpisodeRecorder(
+                args.raw_data_root,
+                control_hz=args.hz,
+                joint_signs=signs,
+                task=args.task,
+                queue_size=args.record_queue_size,
+                metadata={
+                    "calibration": str(calibration_path.resolve()),
+                    "joint_offsets": offsets,
+                    "gripper_host": args.gripper_host,
+                    "gripper_port": args.gripper_port,
+                    "gripper_hz": args.gripper_hz,
+                    "gripper_open_deg": args.gripper_open_deg,
+                    "gripper_close_deg": args.gripper_close_deg,
+                    "gripper_open_pos": args.gripper_open_pos,
+                    "gripper_closed_pos": args.gripper_closed_pos,
+                    "feedback_max_age_s": args.record_feedback_max_age,
+                },
+            )
+            if args.session_path_file is not None:
+                path = args.session_path_file.resolve()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = path.with_suffix(path.suffix + ".partial")
+                temporary.write_text(str(recorder.session_dir.resolve()) + "\n")
+                os.replace(temporary, path)
+            print(f"Raw session: {recorder.session_dir}")
+            print("R=开始，S=保存，D=丢弃，P=状态，H=帮助；退出保留未保存 .partial")
+            keyboard = RecordingKeyboard()
+            keyboard.open()
+            if args.start_recording:
+                recorder.start_episode()
+
         period = 1.0 / args.hz
+        previous_command_ns = None
         while True:
             started = time.perf_counter()
+            if recorder is not None:
+                handle_key(keyboard.poll(), recorder)
             if gripper is not None:
                 gripper.check()
             sample = np.asarray(agent.get_joint_state(), dtype=float)
@@ -105,11 +152,37 @@ def run_client(args: Any) -> int:
             if sample.shape != (expected,) or not np.all(np.isfinite(sample)):
                 raise RuntimeError(f"Expected {expected} valid leader channels")
             target = sample[:6]
+            command_ns = time.monotonic_ns()
+            wall_ns = time.time_ns()
             if not args.dry_run:
                 client.call("command_joint_state", joint_state=target.tolist())
                 if gripper is not None:
                     gripper.submit(float(sample[6]))
-            actual = np.asarray(client.call("get_joint_state"), dtype=float)[:6]
+            if recorder is not None:
+                observations = client.call("get_observations")
+                actual = np.asarray(observations["joint_positions"], dtype=float)
+                feedback = gripper.feedback()
+                observed_ns = time.monotonic_ns()
+                if recorder.is_recording:
+                    recorder.add_sample(
+                        sample_from_cycle(
+                            action=sample,
+                            arm=observations,
+                            gripper=feedback,
+                            command_time_ns=command_ns,
+                            observation_time_ns=observed_ns,
+                            wall_time_ns=wall_ns,
+                            control_period_ns=0
+                            if previous_command_ns is None
+                            else command_ns - previous_command_ns,
+                            open_pos=args.gripper_open_pos,
+                            closed_pos=args.gripper_closed_pos,
+                            max_age_s=args.record_feedback_max_age,
+                        )
+                    )
+            else:
+                actual = np.asarray(client.call("get_joint_state"), dtype=float)[:6]
+            previous_command_ns = command_ns
             print(
                 "\rleader="
                 + str(np.round(np.degrees(target), 1).tolist())
@@ -132,15 +205,28 @@ def run_client(args: Any) -> int:
         return 0
     finally:
         try:
-            if gripper is not None:
-                gripper.close()
-                gripper.check()
+            if keyboard is not None:
+                keyboard.close()
         finally:
-            if agent is not None:
-                agent.close()
-            if client is not None:
-                client.close()
-            signal.signal(signal.SIGTERM, old_term)
+            try:
+                if gripper is not None:
+                    gripper.close()
+                    gripper.check()
+            finally:
+                try:
+                    if agent is not None:
+                        agent.close()
+                finally:
+                    try:
+                        if client is not None:
+                            client.close()
+                    finally:
+                        signal.signal(signal.SIGTERM, old_term)
+                        if recorder is not None and recorder.is_recording:
+                            print(
+                                "Unfinished episode retained: "
+                                f"{recorder.close_interrupted()}"
+                            )
 
 
 def _interrupt(*_args: Any) -> None:
