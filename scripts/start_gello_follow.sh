@@ -10,7 +10,8 @@ gello_port="${XCORE_GELLO_PORT:-/dev/serial/by-id/usb-FTDI_USB__-__Serial_Conver
 calib="$sdk_dir/config/cr7_calib.json"
 server_port=6001
 hz=50
-max_speed_deg=3
+# 六轴实时跟随速度上限（°/s）；命令行可覆盖环境变量和默认值。
+max_speed_deg="${XCORE_FOLLOW_MAX_SPEED_DEG:-3}"
 enable_motion=false
 assume_yes=false
 skip_prepare=false
@@ -36,7 +37,8 @@ usage() {
   --calib FILE         现场标定 JSON，默认 xcore-sdk-python/config/cr7_calib.json
   --port PORT          本机 ZMQ 端口，默认 6001
   --hz HZ              主臂读取／目标发送频率，默认 50 Hz
-  --max-speed-deg V    CR7 跟随关节速度上限，默认 3 °/s
+  --max-speed-deg V    CR7 跟随关节速度上限，0 < V <= 75 °/s，默认 3
+                       也可设置环境变量 XCORE_FOLLOW_MAX_SPEED_DEG
   --enable-motion      启用实际跟随（否则 dry-run）
                        默认先低速对齐到 GELLO 当前姿态，再进入实时跟随
   --skip-prepare       已手动对齐时跳过移动准备，仍校验启动姿态
@@ -158,6 +160,7 @@ prepare = root.parse_args(["follow-prepare", "--speed", sys.argv[7],
 validate(prepare, root)
 PY
 
+echo "六轴实时跟随：速度上限 ${max_speed_deg} °/s，加速度上限 40 °/s²；启动对齐速度 ${prepare_speed} mm/s。"
 echo "[1/3] 检查 SDK、标定与 GELLO 只读反馈"
 "${xcore[@]}" doctor 9>&-
 if [[ "$calibrate_zero" != true ]]; then

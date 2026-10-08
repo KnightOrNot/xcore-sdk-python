@@ -100,9 +100,14 @@ uv run xcore-sdk-python follow-calibrate --ref-current \
 | `--calib` | 标定文件；SDK 仓库 `config/cr7_calib.json` |
 | `--hz` | 主臂读取与发送频率；`50` Hz |
 | `--port` | 本机 ZMQ 端口；`6001`，绑定 `127.0.0.1` |
-| `--max-speed-deg` | 跟随关节速度上限；`3` °/s |
+| `--max-speed-deg` | 跟随关节速度上限；`XCORE_FOLLOW_MAX_SPEED_DEG` 或 `3` °/s |
 | `--enable-motion` | 启用实际运动；默认只读预览 |
 | `--yes` | 跳过已确认现场条件后的交互确认 |
+
+例如 `./scripts/start_gello_follow.sh --enable-motion --max-speed-deg 10` 设置
+每轴最高 `10°/s`；命令行优先于环境变量，启动时显示实际限速。
+软件允许 `0 < V <= 75°/s`，这个上限不代表硬件最大速度或已经实测的速度。
+加速度仍限制为 `40°/s²`，短距离运动可能达不到设定速度。调整后需重启跟随。
 
 跟随速度与 `movej --speed 1000` 是两个独立参数，单位分别为 °/s 和 mm/s。准备及跟随均选择与实际关节反馈最近的 2π 分支。`--enable-motion` 默认先
 以 `--prepare-speed 50`（mm/s 参数）、每段 `--prepare-motion-timeout 600` 秒

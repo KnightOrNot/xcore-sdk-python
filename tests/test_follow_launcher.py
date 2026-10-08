@@ -66,6 +66,7 @@ def launcher(tmp_path: Path) -> tuple[list[str], dict[str, str], Path]:
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "CALLS": str(calls),
     }
+    env.pop("XCORE_FOLLOW_MAX_SPEED_DEG", None)
     cmd = [
         "bash",
         str(scripts / source.name),
@@ -106,6 +107,46 @@ def test_launcher_owns_and_cleans_sessions(launcher, motion: bool) -> None:
     assert ("--enable-motion" in server["args"]) is motion
     assert ("--dry-run" in client["args"]) is not motion
     assert_children_stopped(calls)
+
+
+@pytest.mark.parametrize(
+    "configured, options, expected",
+    [
+        (None, [], "3"),
+        ("10", [], "10"),
+        ("10", ["--max-speed-deg", "20"], "20"),
+        (None, ["--max-speed-deg", "75"], "75"),
+    ],
+)
+def test_follow_speed_reaches_server_and_is_displayed(
+    launcher, configured, options, expected
+) -> None:
+    cmd, env, path = launcher
+    if configured is not None:
+        env["XCORE_FOLLOW_MAX_SPEED_DEG"] = configured
+    result = subprocess.run(
+        cmd + options, env=env, capture_output=True, text=True, timeout=8
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    server = next(
+        c["args"] for c in read_calls(path) if c["args"][1] == "follow-server"
+    )
+    assert server[server.index("--max-speed-deg") + 1] == expected
+    assert f"速度上限 {expected} °/s" in result.stdout
+    assert_children_stopped(read_calls(path))
+
+
+@pytest.mark.parametrize("configured", ["0", "-1", "76", "nan", "abc"])
+def test_invalid_follow_speed_fails_before_hardware_commands(launcher, configured):
+    cmd, env, path = launcher
+    result = subprocess.run(
+        cmd,
+        env={**env, "XCORE_FOLLOW_MAX_SPEED_DEG": configured},
+        capture_output=True,
+        timeout=8,
+    )
+    assert result.returncode != 0
+    assert not path.exists()
 
 
 def test_client_failure_preserved_and_server_stopped(launcher) -> None:
