@@ -53,7 +53,7 @@ usage() {
   --prepare-max-step-deg V   每轴准备运动最大角度差，默认 180°
   --yes                跳过启用运动的交互确认
   --gripper-host HOST  同时跟随外接夹爪；同机服务使用 127.0.0.1
-                       可设置 XCORE_GRIPPER_HOST；控制器顶层入口默认 127.0.0.1
+                       可设置 XCORE_GRIPPER_HOST；控制器顶层入口默认启用夹爪
   --arm-only          仅六轴跟随，禁用环境变量中的夹爪配置
   --gripper-port PORT  夹爪 TCP 端口，默认 5005
   --gripper-id ID      GELLO 扳机 ID，默认 7
