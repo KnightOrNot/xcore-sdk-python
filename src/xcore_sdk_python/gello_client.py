@@ -79,7 +79,7 @@ def run_client(args: Any) -> int:
         if not args.dry_run and error > math.radians(args.gate_deg):
             raise RuntimeError("startup alignment failed; no motion command sent")
         if args.dry_run:
-            print("Dry-run only: showing arm/gripper values; no motion commands sent.")
+            print("Dry-run only: reading arm/gripper values; no motion commands sent.")
         else:
             print(
                 "Enable server motion explicitly; keep the physical E-stop reachable."
@@ -180,23 +180,24 @@ def run_client(args: Any) -> int:
                             max_age_s=args.record_feedback_max_age,
                         )
                     )
-            else:
+            elif args.show_state:
                 actual = np.asarray(client.call("get_joint_state"), dtype=float)[:6]
             previous_command_ns = command_ns
-            print(
-                "\rleader="
-                + str(np.round(np.degrees(target), 1).tolist())
-                + " robot="
-                + str(np.round(np.degrees(actual), 1).tolist())
-                + (
-                    f" gripper_target={sample[6]:.3f}"
-                    + (f" gripper_feedback={gripper.feedback()}" if gripper else "")
-                    if gripper_client is not None
-                    else ""
-                ),
-                end="",
-                flush=True,
-            )
+            if args.show_state:
+                print(
+                    "\rleader="
+                    + str(np.round(np.degrees(target), 1).tolist())
+                    + " robot="
+                    + str(np.round(np.degrees(actual), 1).tolist())
+                    + (
+                        f" gripper_target={sample[6]:.3f}"
+                        + (f" gripper_feedback={gripper.feedback()}" if gripper else "")
+                        if gripper_client is not None
+                        else ""
+                    ),
+                    end="",
+                    flush=True,
+                )
             remaining = period - (time.perf_counter() - started)
             if remaining > 0:
                 time.sleep(remaining)

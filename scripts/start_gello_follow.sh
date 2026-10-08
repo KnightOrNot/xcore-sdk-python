@@ -11,12 +11,12 @@ calib="$sdk_dir/config/cr7_calib.json"
 server_port=6001
 hz=50
 # 六轴实时跟随速度上限（°/s）；命令行可覆盖环境变量和默认值。
-max_speed_deg="${XCORE_FOLLOW_MAX_SPEED_DEG:-3}"
+max_speed_deg="${XCORE_FOLLOW_MAX_SPEED_DEG:-75}"
 enable_motion=false
 assume_yes=false
 skip_prepare=false
 calibrate_zero=false
-prepare_speed="${XCORE_PREPARE_SPEED:-1000}"
+prepare_speed="${XCORE_PREPARE_SPEED:-4000}"
 prepare_motion_timeout=600
 prepare_max_step_deg=180
 prepare_pid=""
@@ -40,18 +40,19 @@ usage() {
   --calib FILE         现场标定 JSON，默认 xcore-sdk-python/config/cr7_calib.json
   --port PORT          本机 ZMQ 端口，默认 6001
   --hz HZ              主臂读取／目标发送频率，默认 50 Hz
-  --max-speed-deg V    CR7 跟随关节速度上限，0 < V <= 75 °/s，默认 3
+  --max-speed-deg V    CR7 跟随关节速度上限，0 < V <= 75 °/s，默认 75
                        也可设置环境变量 XCORE_FOLLOW_MAX_SPEED_DEG
   --enable-motion      启用实际跟随（否则 dry-run）
                        默认先对齐到 GELLO 当前姿态，再进入实时跟随
   --skip-prepare       已手动对齐时跳过移动准备，仍校验启动姿态
   --calibrate-zero     首次标定：GELLO 保持六轴零位，CR7 归零后保存偏移
                        已有标定不能覆盖；正常启动不归零、不重新标定
-  --prepare-speed V    启动对齐 MoveAbsJ 速度，默认 1000 mm/s
+  --prepare-speed V    启动对齐 MoveAbsJ 速度，默认 4000 mm/s（SDK 参数上限）
                        也可设置环境变量 XCORE_PREPARE_SPEED
   --prepare-motion-timeout S 每段准备运动等待时间，默认 600 s
   --prepare-max-step-deg V   每轴准备运动最大角度差，默认 180°
   --yes                跳过启用运动的交互确认
+  --show-state         显示每帧主／从臂与夹爪状态；默认不循环打印
   --gripper-host HOST  同时跟随外接夹爪；同机服务使用 127.0.0.1
                        可设置 XCORE_GRIPPER_HOST；控制器顶层入口默认启用夹爪
   --arm-only          仅六轴跟随，禁用环境变量中的夹爪配置
@@ -119,7 +120,7 @@ while (( $# > 0 )); do
         --prepare-speed) prepare_speed="${2:?缺少准备速度}"; shift 2 ;;
         --prepare-motion-timeout) prepare_motion_timeout="${2:?缺少等待时间}"; shift 2 ;;
         --prepare-max-step-deg) prepare_max_step_deg="${2:?缺少角度差上限}"; shift 2 ;;
-        --start-recording) gripper_options+=("$1"); shift ;;
+        --start-recording|--show-state) gripper_options+=("$1"); shift ;;
         --raw-data-root|--task|--session-path-file|--record-queue-size|--record-feedback-max-age)
             [[ $# -ge 2 ]] || fail "$1 缺少参数"
             gripper_options+=("$1" "$2"); shift 2 ;;

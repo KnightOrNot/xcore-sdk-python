@@ -336,7 +336,7 @@ uv run xcore-sdk-python follow-calibrate --ref-current --save config/cr7_calib.j
 
 `scripts/start_gello_follow.sh --enable-motion` 默认先调用 `follow-prepare`，
 按已有标定读取静止 GELLO 目标，选择离实际 CR7 关节角最近的 2π 分支，
-通过 NRT `MoveAbsJ` 对齐，默认 SDK 速度参数为 `1000 mm/s`，
+通过 NRT `MoveAbsJ` 对齐，脚本默认 SDK 速度参数为 `4000 mm/s`，
 可用 `--prepare-speed`／`XCORE_PREPARE_SPEED` 单独调整，和实时跟随限速独立。
 正常启动不经过零位、不修改标定；
 `--skip-prepare` 保留手动对齐流程。
@@ -357,3 +357,8 @@ CLI 使用隔离 worker，自动为准备运动设置整体等待时间，中断
 `gripper-check`，只发送 `follow_status` 检查激活与实际反馈；
 `commands.execute` 的该分支不创建 CR7 会话。夹爪缺失不会退化为仅六轴，
 明确使用 `--arm-only` 才跳过夹爪；记录仍要求真实夹爪反馈。
+
+启动脚本的实时跟随限速默认采用软件上限 `75°/s`，现有 `40°/s²`
+加速度和步长／软限位保护保持生效。`gello_client` 默认不逐帧打印状态，
+仅 `--show-state` 启用输出；非记录模式的显示用 `get_joint_state` RPC
+同步省去。对齐读取与记录时的 `get_observations` 不受显示设置影响。

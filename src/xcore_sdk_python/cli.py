@@ -162,6 +162,9 @@ def parser() -> argparse.ArgumentParser:
     follow.add_argument("--host", default="127.0.0.1", help="follow-server host")
     follow.add_argument("--port", type=int, default=6001)
     follow.add_argument(
+        "--show-state", action="store_true", help="Print per-cycle state (default: off)"
+    )
+    follow.add_argument(
         "--serial",
         default="/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTB4C7PQ-if00-port0",
     )

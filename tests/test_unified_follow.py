@@ -170,6 +170,38 @@ def test_unified_client_routes_one_sample_to_two_endpoints(monkeypatch, tmp_path
     arm.close.assert_called_once()
 
 
+@pytest.mark.parametrize("show_state", [False, True])
+def test_state_output_does_not_change_arm_commands(
+    monkeypatch, tmp_path, capsys, show_state
+):
+    path = tmp_path / "calib.json"
+    path.write_text(json.dumps({"joint_offsets": [0] * 6, "joint_signs": [1] * 6}))
+    args = parser().parse_args(
+        ["follow", "--calib", str(path), "--yes"]
+        + (["--show-state"] if show_state else [])
+    )
+    agent = Mock()
+    agent.q_without_branch.return_value = np.zeros(6)
+    agent.get_joint_state.side_effect = [np.full(6, 0.1), KeyboardInterrupt()]
+    monkeypatch.setattr(gello_leader, "Cr7LeaderAgent", Mock(return_value=agent))
+    arm = Mock()
+    arm.call.side_effect = lambda cmd, **_: 6 if cmd == "num_dofs" else [0] * 6
+    monkeypatch.setattr(gello_client, "ZmqRobotClient", Mock(return_value=arm))
+    assert gello_client.run_client(args) == 0
+    output = capsys.readouterr().out
+    assert ("leader=" in output) is show_state
+    assert "Startup alignment max error:" in output
+    commands = [
+        c for c in arm.call.call_args_list if c.args[0] == "command_joint_state"
+    ]
+    assert len(commands) == 1
+    assert commands[0].kwargs["joint_state"] == pytest.approx([0.1] * 6)
+    feedback_calls = [
+        c for c in arm.call.call_args_list if c.args[0] == "get_joint_state"
+    ]
+    assert len(feedback_calls) == (2 if show_state else 1)
+
+
 def test_single_reader_drives_six_arm_joints_and_real_tcp_gripper(
     monkeypatch, tmp_path
 ):

@@ -117,7 +117,7 @@ def test_launcher_owns_and_cleans_sessions(launcher, motion: bool) -> None:
 @pytest.mark.parametrize(
     "configured, options, expected",
     [
-        (None, [], "3"),
+        (None, [], "75"),
         ("10", [], "10"),
         ("10", ["--max-speed-deg", "20"], "20"),
         (None, ["--max-speed-deg", "75"], "75"),
@@ -269,7 +269,7 @@ def test_arm_only_conflicts_with_explicit_gripper_before_hardware_commands(launc
 @pytest.mark.parametrize(
     "configured, options, expected",
     [
-        (None, [], "1000"),
+        (None, [], "4000"),
         ("800", [], "800"),
         ("800", ["--prepare-speed", "1200"], "1200"),
     ],
@@ -291,7 +291,18 @@ def test_alignment_speed_independent_of_realtime_limit(
     prepare = next(c["args"] for c in calls if c["args"][1] == "follow-prepare")
     server = next(c["args"] for c in calls if c["args"][1] == "follow-server")
     assert prepare[prepare.index("--speed") + 1] == expected
-    assert server[server.index("--max-speed-deg") + 1] == "3"
+    assert server[server.index("--max-speed-deg") + 1] == "75"
+
+
+def test_state_display_flag_only_reaches_client(launcher):
+    cmd, env, path = launcher
+    result = subprocess.run(
+        cmd + ["--show-state"], env=env, capture_output=True, timeout=8
+    )
+    assert result.returncode == 0
+    calls = read_calls(path)
+    assert "--show-state" not in calls[-2]["args"]
+    assert "--show-state" in calls[-1]["args"]
 
 
 def test_recording_client_inherits_keyboard_input(launcher) -> None:

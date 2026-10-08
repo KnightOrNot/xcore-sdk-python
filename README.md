@@ -104,8 +104,9 @@ SDK 的独立脚本默认仅六轴，可用 `--gripper-host` 或 `XCORE_GRIPPER_
 | `--calib` | 标定文件；SDK 仓库 `config/cr7_calib.json` |
 | `--hz` | 主臂读取与发送频率；`50` Hz |
 | `--port` | 本机 ZMQ 端口；`6001`，绑定 `127.0.0.1` |
-| `--max-speed-deg` | 跟随关节速度上限；`XCORE_FOLLOW_MAX_SPEED_DEG` 或 `3` °/s |
-| `--prepare-speed` | 启动对齐 SDK 速度；`XCORE_PREPARE_SPEED` 或 `1000` mm/s |
+| `--max-speed-deg` | 跟随关节速度上限；`XCORE_FOLLOW_MAX_SPEED_DEG` 或 `75` °/s |
+| `--prepare-speed` | 启动对齐 SDK 速度；`XCORE_PREPARE_SPEED` 或 `4000` mm/s |
+| `--show-state` | 循环打印关节／夹爪状态；默认关闭 |
 | `--gripper-host` | 独立夹爪服务地址；可由 `XCORE_GRIPPER_HOST` 指定 |
 | `--arm-only` | 仅六轴，禁用环境变量中的夹爪配置 |
 | `--enable-motion` | 启用实际运动；默认只读预览 |
@@ -117,9 +118,14 @@ SDK 的独立脚本默认仅六轴，可用 `--gripper-host` 或 `XCORE_GRIPPER_
 加速度仍限制为 `40°/s²`，短距离运动可能达不到设定速度。调整后需重启跟随。
 
 跟随速度与 `movej --speed 1000` 是两个独立参数，单位分别为 °/s 和 mm/s。准备及跟随均选择与实际关节反馈最近的 2π 分支。`--enable-motion` 默认先
-以 `--prepare-speed 1000`（mm/s 参数）、每段 `--prepare-motion-timeout 600` 秒
+以 `--prepare-speed 4000`（mm/s 参数）、每段 `--prepare-motion-timeout 600` 秒
 移动到主臂目标，软限位和每轴 `--prepare-max-step-deg 180` 角度差限制提前校验。
-正常准备直接对齐，不回零或改写标定。`--skip-prepare` 保持原手动对齐模式；
+正常准备直接对齐，不回零或改写标定。`--skip-prepare` 保持原手动对齐模式。
+
+脚本默认采用当前程序允许的对齐和实时跟随速度上限；实际速度仍受控制器、
+轨迹和 `40°/s²` 加速度限制。客户端默认不循环打印状态，
+使用 `--show-state` 恢复逐帧显示。关闭显示时省去显示用的反馈 RPC；
+初始对齐检查、控制指令、录制时实际反馈读取和故障检查继续执行。
 RT 启动仍检查默认 `17.1887°` 闸门。客户端目标以 50 Hz 发送，驱动通过 SDK RT 回调平滑下发，带速度、加速度、软限位和断流检查。
 
 按 **Ctrl+C** 结束。脚本先结束主臂客户端，再请求服务端关闭；驱动请求 RT 回调结束、`stopMove`、恢复 NRT／manual 并断开连接。不会自动回零或下电；退出后核对示教器状态。服务端日志留在 `logs/follow-*/server.log`。
