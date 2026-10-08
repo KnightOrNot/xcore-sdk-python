@@ -27,7 +27,7 @@ uv run xcore-sdk-python network
 uv run xcore-sdk-python status
 ```
 
-本机已经具备 `Release/linux/xCoreSDK_python.cpython-311-x86_64-linux-gnu.so`。新电脑需要先从 [官方 SDK v0.7.1 Release](https://github.com/RokaeRobot/xCoreSDK-Python/releases/tag/v0.7.1) 获取与操作系统、CPU 架构和 CPython 版本匹配的二进制；二进制不纳入 Git。`doctor` 检查扩展加载和 API，不连接机械臂。
+仓库已纳入 SDK 0.7.1 的 `Release/linux/xCoreSDK_python.cpython-311-x86_64-linux-gnu.so`。Linux x86_64、CPython 3.11 环境 clone 后即可使用，无需另行下载。其他平台或 Python 版本仍需从 [官方 SDK v0.7.1 Release](https://github.com/RokaeRobot/xCoreSDK-Python/releases/tag/v0.7.1) 获取匹配库。`doctor` 检查扩展加载和 API，不连接机械臂。
 
 项目当前固定 Python 3.11。SDK 不是只能使用 Python 3.10，但 `cpython-310` 二进制不能直接用于 3.11，单纯重命名文件也不能改变 ABI。更换解释器时需同时更换匹配扩展并调整项目版本约束。
 

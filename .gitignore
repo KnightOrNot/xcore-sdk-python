@@ -1,11 +1,7 @@
-# Prebuilt Python extension modules — distributed via GitHub Releases
+# Ignore dependency libraries; vendor SDK binaries in Release/ are tracked.
 **/lib/*.so
 **/lib/*.pyd
 **/lib/*.dll
-
-Release/**/*.so
-Release/**/*.pyd
-Release/**/xCoreSDK.dll
 
 scripts/*
 !scripts/start_gello_follow.sh

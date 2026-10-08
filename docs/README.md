@@ -24,7 +24,11 @@
 
 ## 获取预编译库
 
-本仓库包含示例脚本与类型存根（`.pyi`），**不包含** Python 扩展模块（`.pyd` / `.so`）及依赖的 `xCoreSDK.dll`。这些文件通过 [GitHub Releases](https://github.com/RokaeRobot/xCoreSDK-Python/releases) 按版本分发。
+本仓库已包含 SDK 0.7.1 的 Linux x86_64、CPython 3.11 扩展
+`Release/linux/xCoreSDK_python.cpython-311-x86_64-linux-gnu.so`；此组合 clone 后
+无需另行下载。Windows、aarch64 和其他 Python 版本的库仍通过
+[官方 GitHub Releases](https://github.com/RokaeRobot/xCoreSDK-Python/releases) 获取。
+下文是这些其他环境的手动安装方法。
 
 ### 获取步骤
 

@@ -14,7 +14,8 @@ uv run xcore-sdk-python check
 
 如果已有 pyenv 解释器，可用 `uv sync --python /home/knight/.pyenv/versions/3.11.16/bin/python`。`.python-version` 指定 3.11，`pyproject.toml` 当前要求 `>=3.11,<3.12`。跟随功能增加 numpy、pyzmq 和 Dynamixel SDK 依赖；依赖变更后使用 `uv lock` 更新锁文件，再用 `uv sync --frozen` 安装锁定版本。开发组使用 pytest 和 Ruff。
 
-厂商 `.so/.pyd/.dll` 通过 Release 单独分发，不在 Git 中。默认搜索路径为：
+SDK 0.7.1 的 Linux x86_64、CPython 3.11 `.so` 已纳入 Git，clone 即可获取。
+其他平台的匹配库仍需从厂商 Release 获取。默认搜索路径为：
 
 | 平台 | 扩展目录 |
 | --- | --- |
