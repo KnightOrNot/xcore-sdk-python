@@ -330,3 +330,22 @@ uv run xcore-sdk-python follow-calibrate --ref-current --save config/cr7_calib.j
 当前扩展已离线检查到 `getRtMotionController`、`JointPosition`、`RtControllerMode`、`MotionControlMode.RtCommandMode`。原生 SDK 和非实时控制的实机记录见前文。新的实时跟随尚未在 CPython 3.11 + SDK 0.7.1 + 当前 CR7 上完成真机启停／连续跟随验收；同学项目实测只作为驱动实现参考。
 
 现场验收顺序：核对 IP／SDK 与串口，完成静止同姿态标定，逐轴 dry-run 核对方向和分支，再验证低速静止启停、短行程跟随及 Ctrl+C 收尾，确认后再调整速度与负载条件。此任务只接入六轴跟随；夹爪和仿真显示没有实现。
+
+
+## 启动对齐准备
+
+`scripts/start_gello_follow.sh --enable-motion` 默认先调用 `follow-prepare`，
+按已有标定读取静止 GELLO 目标，选择离实际 CR7 关节角最近的 2π 分支，
+通过低速 NRT `MoveAbsJ` 对齐。正常启动不经过零位、不修改标定；
+`--skip-prepare` 保留手动对齐流程。
+
+`follow_prepare.py` 在变更电源前检查空闲状态、软限位和每轴角度差，
+准备期间校验主臂保持不动；运动结束/异常后先 stop 并等待 idle，再恢复
+准备前的电源和操作模式。准备 SDK 会话完全关闭后才启动原 RT 服务。
+CLI 使用隔离 worker，自动为准备运动设置整体等待时间，中断给 worker
+10 秒清理窗口；shell 统一管理准备进程组和同一把 follow 锁。
+
+首次 `--calibrate-zero` 是对 GELLO 零位姿态的显式声明：只在无标定文件时
+把 CR7 归到全零后生成偏移。原有同姿态 `follow-calibrate --ref-current`
+继续可用。标定文件原子发布且不覆盖已有文件。
+控制器 README 给出只使用 shell 的首次和日常操作流程。

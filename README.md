@@ -66,6 +66,16 @@ uv run xcore-sdk-python follow-calibrate --ref-current \
 
 标定文件不纳入 Git，已有文件不会被覆盖。单姿态标定无法自动判断轴方向；默认六轴方向均为 `+1`，若现场方向不同，用 `--signs S1 S2 S3 S4 S5 S6` 指定六个 `+1`／`-1`，再重新标定并逐轴核对 dry-run。完整帮助：`uv run xcore-sdk-python follow-calibrate --help`。
 
+首次仅使用 shell 标定时，GELLO 保持 CR7 六轴均为 0° 的标准姿态：
+
+```bash
+./scripts/start_gello_follow.sh --enable-motion --calibrate-zero
+```
+
+脚本先低速把 CR7 移至全零，采集偏移后进入跟随。已有标定不会覆盖；
+重标定请通过 `--calib` 指定新路径。日常启动复用标定，主臂无需回到零位。
+当前的六轴方向沿用本机配置；不同装配需使用上方标定 CLI 的 `--signs`。
+
 ### 2. 预览，再启动跟随
 
 在 SDK 仓库根目录运行：
@@ -74,11 +84,13 @@ uv run xcore-sdk-python follow-calibrate --ref-current \
 # 只读预览主臂映射与从臂反馈
 ./scripts/start_gello_follow.sh
 
-# 启用实际六轴跟随，启动时输入 y 确认
+# 按已有标定低速对齐到 GELLO 当前姿态，再进入六轴跟随；输入 y 确认
 ./scripts/start_gello_follow.sh --enable-motion
 ```
 
-在控制器目录 xcore-controller 中也可直接使用 `./start_gello_follow.sh`。无需同时开两个终端。脚本先运行离线参数检查、`doctor` 和只读 `follow-check`，然后启动服务端并等待就绪，最后启动主臂客户端。服务端独占一个 SDK 连接；跟随期间不要另开 `status`、`power`、`movej` 等连接同一机械臂的命令。
+在控制器目录 xcore-controller 中也可直接使用 `./start_gello_follow.sh`。无需同时开两个终端。脚本先运行离线参数检查、`doctor` 和只读 `follow-check`，启用运动时先按已有标定
+低速移动 CR7 到静止的 GELLO 当前目标，对齐完成后关闭准备会话，再启动服务端
+并等待就绪，最后启动主臂客户端。准备期间保持 GELLO 不动。服务端独占一个 SDK 连接；跟随期间不要另开 `status`、`power`、`movej` 等连接同一机械臂的命令。
 
 | 脚本参数 | 用途／默认值 |
 | --- | --- |
@@ -92,7 +104,11 @@ uv run xcore-sdk-python follow-calibrate --ref-current \
 | `--enable-motion` | 启用实际运动；默认只读预览 |
 | `--yes` | 跳过已确认现场条件后的交互确认 |
 
-跟随速度与 `movej --speed 1000` 是两个独立参数，单位分别为 °/s 和 mm/s。启动时选择与实际关节反馈最近的 2π 分支；初始误差超过默认 `17.1887°` 对齐阈值时拒绝运动，不自动把从臂移到主臂位置。客户端目标以 50 Hz 发送，驱动通过 SDK RT 回调平滑下发，带速度、加速度、软限位和断流检查。
+跟随速度与 `movej --speed 1000` 是两个独立参数，单位分别为 °/s 和 mm/s。准备及跟随均选择与实际关节反馈最近的 2π 分支。`--enable-motion` 默认先
+以 `--prepare-speed 50`（mm/s 参数）、每段 `--prepare-motion-timeout 600` 秒
+移动到主臂目标，软限位和每轴 `--prepare-max-step-deg 180` 角度差限制提前校验。
+正常准备直接对齐，不回零或改写标定。`--skip-prepare` 保持原手动对齐模式；
+RT 启动仍检查默认 `17.1887°` 闸门。客户端目标以 50 Hz 发送，驱动通过 SDK RT 回调平滑下发，带速度、加速度、软限位和断流检查。
 
 按 **Ctrl+C** 结束。脚本先结束主臂客户端，再请求服务端关闭；驱动请求 RT 回调结束、`stopMove`、恢复 NRT／manual 并断开连接。不会自动回零或下电；退出后核对示教器状态。服务端日志留在 `logs/follow-*/server.log`。
 
@@ -151,7 +167,7 @@ uv run xcore-sdk-python follow-calibrate --ref-current \
 ## 跟随期间记录从臂实际状态
 
 控制器提供 `start_data_record.sh`，沿用普通跟随的标定、对齐、限速和退出流程，
-结束后由控制器的 `tools/convert_cr7.py` 复用原转换器写入 LeRobot 数据集；
+准备阶段同样先对齐到主臂当前姿态；结束后由控制器的 `tools/convert_cr7.py` 复用原转换器写入 LeRobot 数据集；
 转换使用独立 Python 3.12，控制进程仍使用 Python 3.11。
 先启动夹爪服务，再在控制器目录运行：
 

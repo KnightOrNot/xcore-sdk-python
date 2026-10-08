@@ -15,6 +15,10 @@ def execute(options: dict[str, Any]) -> dict[str, Any]:
     command = options["command"]
     if command == "doctor":
         return doctor(options.get("sdk_dir"))
+    if command == "follow-prepare":
+        from .follow_prepare import prepare
+
+        return prepare(options)
     driver_commands = {"power", "mode", "stop", "movej", "move-joint"}
     client = RobotDriver if command in driver_commands else RobotConnection
     with client(

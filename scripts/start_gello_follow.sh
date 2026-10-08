@@ -13,6 +13,13 @@ hz=50
 max_speed_deg=3
 enable_motion=false
 assume_yes=false
+skip_prepare=false
+calibrate_zero=false
+prepare_speed=50
+prepare_motion_timeout=600
+prepare_max_step_deg=180
+prepare_pid=""
+prepare_gripper_options=()
 server_pid=""
 client_pid=""
 session_dir=""
@@ -31,6 +38,13 @@ usage() {
   --hz HZ              主臂读取／目标发送频率，默认 50 Hz
   --max-speed-deg V    CR7 跟随关节速度上限，默认 3 °/s
   --enable-motion      启用实际跟随（否则 dry-run）
+                       默认先低速对齐到 GELLO 当前姿态，再进入实时跟随
+  --skip-prepare       已手动对齐时跳过移动准备，仍校验启动姿态
+  --calibrate-zero     首次标定：GELLO 保持六轴零位，CR7 归零后保存偏移
+                       已有标定不能覆盖；正常启动不归零、不重新标定
+  --prepare-speed V    启动对齐 MoveAbsJ 速度，默认 50 mm/s
+  --prepare-motion-timeout S 每段准备运动等待时间，默认 600 s
+  --prepare-max-step-deg V   每轴准备运动最大角度差，默认 180°
   --yes                跳过启用运动的交互确认
   --gripper-host HOST  同时跟随外接夹爪；同机服务使用 127.0.0.1
   --gripper-port PORT  夹爪 TCP 端口，默认 5005
@@ -73,6 +87,7 @@ cleanup() {
     # Stop leader targets first, then allow the RT server to finish its loop.
     stop_group "$client_pid"
     stop_group "$server_pid"
+    stop_group "$prepare_pid"
     [[ -z "$session_dir" ]] || echo "服务端日志：$session_dir/server.log"
     exit "$exit_code"
 }
@@ -91,11 +106,20 @@ while (( $# > 0 )); do
         --max-speed-deg) max_speed_deg="${2:?--max-speed-deg 缺少数值}"; shift 2 ;;
         --enable-motion) enable_motion=true; shift ;;
         --yes) assume_yes=true; shift ;;
+        --skip-prepare) skip_prepare=true; shift ;;
+        --calibrate-zero) calibrate_zero=true; shift ;;
+        --prepare-speed) prepare_speed="${2:?缺少准备速度}"; shift 2 ;;
+        --prepare-motion-timeout) prepare_motion_timeout="${2:?缺少等待时间}"; shift 2 ;;
+        --prepare-max-step-deg) prepare_max_step_deg="${2:?缺少角度差上限}"; shift 2 ;;
         --start-recording) gripper_options+=("$1"); shift ;;
         --raw-data-root|--task|--session-path-file|--record-queue-size|--record-feedback-max-age)
             [[ $# -ge 2 ]] || fail "$1 缺少参数"
             gripper_options+=("$1" "$2"); shift 2 ;;
-        --gripper-host|--gripper-port|--gripper-id|--gripper-open-deg|--gripper-close-deg|--gripper-open-pos|--gripper-closed-pos|--gripper-hz|--gripper-speed|--gripper-force|--gripper-timeout|--gripper-stale-timeout)
+        --gripper-host|--gripper-port|--gripper-timeout)
+            [[ $# -ge 2 ]] || fail "$1 缺少参数"
+            prepare_gripper_options+=("$1" "$2")
+            gripper_options+=("$1" "$2"); shift 2 ;;
+        --gripper-id|--gripper-open-deg|--gripper-close-deg|--gripper-open-pos|--gripper-closed-pos|--gripper-hz|--gripper-speed|--gripper-force|--gripper-stale-timeout)
             [[ $# -ge 2 ]] || fail "$1 缺少参数"
             gripper_options+=("$1" "$2"); shift 2 ;;
         -h|--help) usage; exit 0 ;;
@@ -106,7 +130,12 @@ done
 for task_command in uv flock setsid; do
     command -v "$task_command" >/dev/null || fail "未安装 $task_command"
 done
-[[ -r "$calib" ]] || fail "缺少可读标定文件：$calib；先运行 xcore-sdk-python follow-calibrate"
+if [[ "$calibrate_zero" == true ]]; then
+    [[ "$enable_motion" == true && "$skip_prepare" == false ]] || fail "--calibrate-zero 需要 --enable-motion，不能与 --skip-prepare 一起使用"
+    [[ ! -e "$calib" ]] || fail "标定文件已存在：$calib；重标定请用 --calib 指定新文件"
+else
+    [[ -r "$calib" ]] || fail "缺少标定：$calib；主臂保持零位后加 --enable-motion --calibrate-zero 首次标定"
+fi
 [[ -r "$gello_port" && -w "$gello_port" ]] || fail "GELLO 串口不存在或无读写权限：$gello_port"
 
 # Only the launcher owns the descriptor; its child processes must not inherit it.
@@ -114,28 +143,50 @@ exec 9>"$sdk_dir/.follow.lock"
 flock -n 9 || fail "已有跟随启动流程正在运行"
 
 # Parse all motion/network options before connecting to CR7 or opening the serial port.
-uv run --locked --project "$sdk_dir" python - "$robot_ip" "$local_ip" "$server_port" "$hz" "$max_speed_deg" "$enable_motion" "${gripper_options[@]}" <<'PY'
+uv run --locked --project "$sdk_dir" python - "$robot_ip" "$local_ip" "$server_port" "$hz" "$max_speed_deg" "$enable_motion" "$prepare_speed" "$prepare_motion_timeout" "$prepare_max_step_deg" "${gripper_options[@]}" <<'PY'
 import sys
 from xcore_sdk_python.cli import parser, validate
 root = parser()
 server = root.parse_args(["follow-server", "--ip", sys.argv[1], "--local-ip", sys.argv[2],
                          "--port", sys.argv[3], "--max-speed-deg", sys.argv[5]])
 validate(server, root)
-client = root.parse_args(["follow", "--port", sys.argv[3], "--hz", sys.argv[4], *sys.argv[7:]]
+client = root.parse_args(["follow", "--port", sys.argv[3], "--hz", sys.argv[4], *sys.argv[10:]]
                          + ([] if sys.argv[6] == "true" else ["--dry-run"]))
 validate(client, root)
+prepare = root.parse_args(["follow-prepare", "--speed", sys.argv[7],
+                           "--motion-timeout", sys.argv[8], "--max-step-deg", sys.argv[9]])
+validate(prepare, root)
 PY
 
 echo "[1/3] 检查 SDK、标定与 GELLO 只读反馈"
 "${xcore[@]}" doctor 9>&-
-"${xcore[@]}" follow-check --serial "$gello_port" --calib "$calib" 9>&-
+if [[ "$calibrate_zero" != true ]]; then
+    "${xcore[@]}" follow-check --serial "$gello_port" --calib "$calib" 9>&-
+fi
 if [[ "$enable_motion" == true && "$assume_yes" != true ]]; then
-    read -r -p "将启用跟随（含已配置的夹爪）；确认现场安全，输入 y 继续：" answer
+    if [[ "$calibrate_zero" == true ]]; then
+        echo "首次标定要求 GELLO 处于六轴 0° 姿态；CR7 将先归到六轴 0°。"
+    fi
+    read -r -p "将准备对齐并启用跟随；准备期间保持 GELLO 不动，确认运动范围后输入 y：" answer
     [[ "$answer" == y || "$answer" == yes ]] || { echo "已取消。"; exit 0; }
 fi
 
 mkdir -p "$sdk_dir/logs"
 session_dir="$(mktemp -d "$sdk_dir/logs/follow-$(date +%Y%m%d-%H%M%S)-XXXXXX")"
+if [[ "$enable_motion" == true && "$skip_prepare" == false ]]; then
+    prepare_options=()
+    [[ "$calibrate_zero" != true ]] || prepare_options=(--calibrate-zero)
+    echo "[准备] 按标定低速移动到 GELLO 当前目标；保持主臂不动，单段最多等待 ${prepare_motion_timeout}s。"
+    PYTHONUNBUFFERED=1 setsid "${xcore[@]}" follow-prepare \
+        --ip "$robot_ip" --local-ip "$local_ip" --serial "$gello_port" --calib "$calib" \
+        --speed "$prepare_speed" --motion-timeout "$prepare_motion_timeout" \
+        --max-step-deg "$prepare_max_step_deg" --output "$session_dir/preparation.json" \
+        "${prepare_options[@]}" "${prepare_gripper_options[@]}" 9>&- &
+    prepare_pid=$!
+    wait "$prepare_pid"
+    prepare_pid=""
+    echo "[准备] 对齐完成，准备会话已关闭；现在启动实时跟随。"
+fi
 server_options=()
 client_options=(--dry-run)
 if [[ "$enable_motion" == true ]]; then

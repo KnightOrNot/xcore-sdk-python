@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import ipaddress
 import json
 import math
@@ -124,6 +125,28 @@ def parser() -> argparse.ArgumentParser:
     follow_server.add_argument("--gate-deg", type=finite, default=17.1887)
     follow_server.add_argument("--quiet", action="store_true")
 
+    prepare = sub.add_parser(
+        "follow-prepare",
+        parents=[copy.deepcopy(common)],
+        help="Align CR7 to the stationary calibrated GELLO target before RT follow",
+    )
+    prepare.set_defaults(timeout=None)
+    prepare.add_argument(
+        "--serial",
+        default="/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTB4C7PQ-if00-port0",
+    )
+    prepare.add_argument("--baudrate", type=int, default=57600)
+    prepare.add_argument("--calib", type=Path, default=Path("config/cr7_calib.json"))
+    prepare.add_argument("--calibrate-zero", action="store_true")
+    prepare.add_argument("--signs", type=int, nargs=6, choices=(-1, 1), default=[1] * 6)
+    prepare.add_argument("--speed", type=finite, default=50)
+    prepare.add_argument("--max-step-deg", type=finite, default=180)
+    prepare.add_argument("--tolerance-deg", type=finite, default=0.2)
+    prepare.add_argument("--motion-timeout", type=finite, default=600)
+    prepare.add_argument("--gripper-host")
+    prepare.add_argument("--gripper-port", type=int, default=5005)
+    prepare.add_argument("--gripper-timeout", type=finite, default=0.75)
+
     follow = sub.add_parser(
         "follow", parents=[common], help="Read GELLO leader and stream six CR7 joints"
     )
@@ -214,6 +237,8 @@ def parser() -> argparse.ArgumentParser:
 
 def validate(args: argparse.Namespace, root: argparse.ArgumentParser) -> None:
     args.local_ip = args.local_ip or ""
+    if args.command == "follow-prepare" and args.timeout is None:
+        args.timeout = 2 * args.motion_timeout + 30
     if args.timeout <= 0:
         root.error("--timeout must be positive")
     if args.output and args.output.exists():
@@ -239,6 +264,15 @@ def validate(args: argparse.Namespace, root: argparse.ArgumentParser) -> None:
             root.error("--timeout must exceed --motion-timeout + 2")
         if args.command == "move-joint" and abs(args.delta_deg) > args.max_step_deg:
             root.error("--delta-deg exceeds --max-step-deg")
+    if args.command == "follow-prepare":
+        if not 5 <= args.speed <= 4000:
+            root.error("preparation speed must be in [5,4000] mm/s")
+        if min(args.max_step_deg, args.tolerance_deg, args.motion_timeout) <= 0:
+            root.error("preparation limits and timeouts must be positive")
+        if args.timeout <= 2 * args.motion_timeout + 10:
+            root.error("preparation timeout must exceed both motion timeouts plus 10s")
+        if not 1 <= args.gripper_port <= 65535 or args.gripper_timeout <= 0:
+            root.error("invalid gripper port or timeout")
     if args.command == "network" and args.action != "check" and not args.interface:
         root.error("network configure/reset requires --interface")
     if args.command == "network" and args.action == "configure":
@@ -310,10 +344,10 @@ def validate(args: argparse.Namespace, root: argparse.ArgumentParser) -> None:
         root.error("--save already exists; choose a new calibration file")
 
 
-def terminate(process: subprocess.Popen) -> None:
+def terminate(process: subprocess.Popen, *, grace: float = 1) -> None:
     process.terminate()
     try:
-        process.communicate(timeout=1)
+        process.communicate(timeout=grace)
     except subprocess.TimeoutExpired:
         process.kill()
         process.communicate()
@@ -332,7 +366,7 @@ def isolated(options: dict[str, Any]) -> dict[str, Any]:
             json.dumps(options), timeout=options["timeout"]
         )
     except (subprocess.TimeoutExpired, KeyboardInterrupt):
-        terminate(child)
+        terminate(child, grace=10 if options["command"] == "follow-prepare" else 1)
         raise
     for line in reversed(output.splitlines()):
         if line.startswith(RESULT_PREFIX):
@@ -400,6 +434,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     options = vars(args).copy()
     options.pop("output")
+    if args.command == "follow-prepare":
+        options["calib"] = str(args.calib)
     try:
         if args.command == "network":
             result = (

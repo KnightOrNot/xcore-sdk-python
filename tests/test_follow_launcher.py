@@ -37,6 +37,14 @@ def launcher(tmp_path: Path) -> tuple[list[str], dict[str, str], Path]:
         "    f.write(json.dumps({'args': args, 'pid': os.getpid()}) + '\\n')\n"
         "if command in ('doctor', 'follow-check'):\n"
         "    print('{\"ok\": true}')\n"
+        "elif command == 'follow-prepare':\n"
+        "    if os.environ.get('FAIL_PREPARE'): sys.exit(9)\n"
+        "    if os.environ.get('HOLD_PREPARE'):\n"
+        "        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
+        "        while True: time.sleep(.02)\n"
+        "    output = args[args.index('--output')+1]\n"
+        "    with open(output, 'w') as f: f.write('{}')\n"
+        "    print('{\"ok\": true}')\n"
         "elif command == 'follow-server':\n"
         "    if os.environ.get('FAIL_SERVER'):\n"
         "        sys.exit(7)\n"
@@ -75,7 +83,7 @@ def read_calls(path: Path) -> list[dict]:
 
 def assert_children_stopped(calls: list[dict]) -> None:
     for call in calls:
-        if call["args"][1] in ("follow-server", "follow"):
+        if call["args"][1] in ("follow-prepare", "follow-server", "follow"):
             with pytest.raises(ProcessLookupError):
                 os.kill(call["pid"], 0)
 
@@ -88,14 +96,15 @@ def test_launcher_owns_and_cleans_sessions(launcher, motion: bool) -> None:
     result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=8)
     assert result.returncode == 0, result.stderr + result.stdout
     calls = read_calls(path)
-    assert [c["args"][1] for c in calls] == [
-        "doctor",
-        "follow-check",
-        "follow-server",
-        "follow",
-    ]
-    assert ("--enable-motion" in calls[2]["args"]) is motion
-    assert ("--dry-run" in calls[3]["args"]) is not motion
+    assert [c["args"][1] for c in calls] == (
+        ["doctor", "follow-check"]
+        + (["follow-prepare"] if motion else [])
+        + ["follow-server", "follow"]
+    )
+    server = next(c for c in calls if c["args"][1] == "follow-server")
+    client = next(c for c in calls if c["args"][1] == "follow")
+    assert ("--enable-motion" in server["args"]) is motion
+    assert ("--dry-run" in client["args"]) is not motion
     assert_children_stopped(calls)
 
 
@@ -187,4 +196,84 @@ def test_recording_client_inherits_keyboard_input(launcher) -> None:
         timeout=8,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "--start-recording" in read_calls(path)[3]["args"]
+    assert "--start-recording" in next(
+        c["args"] for c in read_calls(path) if c["args"][1] == "follow"
+    )
+
+
+def test_failed_preparation_never_starts_rt_server_or_client(launcher):
+    cmd, env, path = launcher
+    result = subprocess.run(
+        cmd + ["--enable-motion", "--yes"],
+        env={**env, "FAIL_PREPARE": "1"},
+        capture_output=True,
+        timeout=8,
+    )
+    assert result.returncode == 9
+    assert [c["args"][1] for c in read_calls(path)] == [
+        "doctor",
+        "follow-check",
+        "follow-prepare",
+    ]
+    assert_children_stopped(read_calls(path))
+
+
+def test_skip_prepare_preserves_manual_alignment_mode(launcher):
+    cmd, env, path = launcher
+    result = subprocess.run(
+        cmd + ["--enable-motion", "--yes", "--skip-prepare"],
+        env=env,
+        capture_output=True,
+        timeout=8,
+    )
+    assert result.returncode == 0
+    assert "follow-prepare" not in [c["args"][1] for c in read_calls(path)]
+
+
+def test_first_zero_calibration_uses_sh_entry_without_existing_calibration(launcher):
+    cmd, env, path = launcher
+    (path.parent / "calib.json").unlink()
+    result = subprocess.run(
+        cmd + ["--enable-motion", "--yes", "--calibrate-zero"],
+        env=env,
+        capture_output=True,
+        timeout=8,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = read_calls(path)
+    assert [c["args"][1] for c in calls] == [
+        "doctor",
+        "follow-prepare",
+        "follow-server",
+        "follow",
+    ]
+    assert "--calibrate-zero" in calls[1]["args"]
+
+
+def test_interrupt_during_preparation_stops_owned_process_before_rt_start(launcher):
+    cmd, env, path = launcher
+    process = subprocess.Popen(
+        cmd + ["--enable-motion", "--yes"],
+        env={**env, "HOLD_PREPARE": "1"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not path.exists() or len(read_calls(path)) < 3:
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        process.send_signal(signal.SIGTERM)
+        process.communicate(timeout=8)
+        assert process.returncode == 143
+        calls = read_calls(path)
+        assert [c["args"][1] for c in calls] == [
+            "doctor",
+            "follow-check",
+            "follow-prepare",
+        ]
+        assert_children_stopped(calls)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
