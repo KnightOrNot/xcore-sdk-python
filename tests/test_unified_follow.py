@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import socketserver
 import threading
 import time
 from unittest.mock import Mock
@@ -11,6 +12,24 @@ import pytest
 from xcore_sdk_python import gello_client, gello_leader
 from xcore_sdk_python.cli import parser, validate
 from xcore_sdk_python.gripper_follow import GripperFollower
+
+
+def test_gripper_check_never_opens_arm_session(monkeypatch):
+    from xcore_sdk_python import commands, gripper_follow
+
+    transport = Mock()
+    transport.check.return_value = {"streaming": True, "position_raw": 128}
+    create = Mock(return_value=transport)
+    monkeypatch.setattr(gripper_follow, "GripperFollowClient", create)
+    monkeypatch.setattr(
+        commands, "RobotConnection", lambda **_: pytest.fail("must not connect CR7")
+    )
+    args = parser().parse_args(["gripper-check", "--gripper-host", "127.0.0.1"])
+    validate(args, parser())
+    result = commands.execute(vars(args))
+    assert result["position_raw"] == 128
+    create.assert_called_once_with("127.0.0.1", 5005, 0.75)
+    transport.request.assert_not_called()
 
 
 def wait_for(predicate):
@@ -149,6 +168,89 @@ def test_unified_client_routes_one_sample_to_two_endpoints(monkeypatch, tmp_path
     assert ("gripper_id" in create_agent.call_args.kwargs) == (mode != "arm-only")
     agent.close.assert_called_once()
     arm.close.assert_called_once()
+
+
+def test_single_reader_drives_six_arm_joints_and_real_tcp_gripper(
+    monkeypatch, tmp_path
+):
+    requests = []
+    positions = []
+
+    class Handler(socketserver.StreamRequestHandler):
+        def handle(self):
+            request = json.loads(self.rfile.readline())
+            requests.append(request)
+            if request["cmd"] == "set_target":
+                positions.append(request["pos"])
+            result = {
+                "streaming": True,
+                "stream_error": None,
+                "status_code": 0x31,
+                "position_raw": positions[-1] if positions else 0,
+            }
+            self.wfile.write(
+                (json.dumps({"ok": True, "result": result}) + "\n").encode()
+            )
+
+    path = tmp_path / "calib.json"
+    path.write_text(json.dumps({"joint_offsets": [0] * 6, "joint_signs": [1] * 6}))
+    with socketserver.TCPServer(("127.0.0.1", 0), Handler) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            args = parser().parse_args(
+                [
+                    "follow",
+                    "--calib",
+                    str(path),
+                    "--yes",
+                    "--gripper-host",
+                    "127.0.0.1",
+                    "--gripper-port",
+                    str(server.server_address[1]),
+                ]
+            )
+            samples = [
+                np.array([closure / 10] * 6 + [closure]) for closure in (0, 0.5, 1)
+            ]
+            index = 0
+
+            def read_sample():
+                nonlocal index
+                if index:
+                    previous = round(float(samples[index - 1][6]) * 255)
+                    wait_for(lambda: positions and positions[-1] == previous)
+                if index == len(samples):
+                    raise KeyboardInterrupt
+                sample = samples[index]
+                index += 1
+                return sample
+
+            agent = Mock()
+            agent.q_without_branch.return_value = np.zeros(6)
+            agent.get_joint_state.side_effect = read_sample
+            create = Mock(return_value=agent)
+            monkeypatch.setattr(gello_leader, "Cr7LeaderAgent", create)
+            arm = Mock()
+            arm.call.side_effect = lambda cmd, **_: 6 if cmd == "num_dofs" else [0] * 6
+            monkeypatch.setattr(gello_client, "ZmqRobotClient", Mock(return_value=arm))
+            assert gello_client.run_client(args) == 0
+            assert create.call_count == 1
+            assert create.call_args.kwargs["gripper_id"] == 7
+            targets = [
+                call.kwargs["joint_state"]
+                for call in arm.call.call_args_list
+                if call.args[0] == "command_joint_state"
+            ]
+            np.testing.assert_allclose(targets, [sample[:6] for sample in samples])
+            assert positions == [0, 128, 255]
+            assert requests[0]["cmd"] == "follow_status"
+            assert requests[-1]["cmd"] == "stop"
+            agent.close.assert_called_once()
+            arm.close.assert_called_once()
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
 
 
 @pytest.mark.parametrize(

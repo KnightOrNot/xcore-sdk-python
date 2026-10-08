@@ -72,7 +72,7 @@ uv run xcore-sdk-python follow-calibrate --ref-current \
 ./scripts/start_gello_follow.sh --enable-motion --calibrate-zero
 ```
 
-脚本先低速把 CR7 移至全零，采集偏移后进入跟随。已有标定不会覆盖；
+脚本先把 CR7 移至全零，采集偏移后进入跟随。已有标定不会覆盖；
 重标定请通过 `--calib` 指定新路径。日常启动复用标定，主臂无需回到零位。
 当前的六轴方向沿用本机配置；不同装配需使用上方标定 CLI 的 `--signs`。
 
@@ -84,12 +84,16 @@ uv run xcore-sdk-python follow-calibrate --ref-current \
 # 只读预览主臂映射与从臂反馈
 ./scripts/start_gello_follow.sh
 
-# 按已有标定低速对齐到 GELLO 当前姿态，再进入六轴跟随；输入 y 确认
+# 按已有标定对齐到 GELLO 当前姿态，再进入六轴跟随；输入 y 确认
 ./scripts/start_gello_follow.sh --enable-motion
 ```
 
-在控制器目录 xcore-controller 中也可直接使用 `./start_gello_follow.sh`。无需同时开两个终端。脚本先运行离线参数检查、`doctor` 和只读 `follow-check`，启用运动时先按已有标定
-低速移动 CR7 到静止的 GELLO 当前目标，对齐完成后关闭准备会话，再启动服务端
+在控制器目录 xcore-controller 中也可直接使用 `./start_gello_follow.sh`，但控制器
+顶层入口默认同时启用夹爪，需先启动夹爪服务；仅六轴使用 `--arm-only`。
+SDK 的独立脚本默认仅六轴，可用 `--gripper-host` 或 `XCORE_GRIPPER_HOST` 启用夹爪。
+脚本先运行离线参数检查；启用夹爪时在打开 GELLO／连接 CR7 前检查夹爪服务。
+随后运行 `doctor` 和只读 `follow-check`，启用运动时先按已有标定
+移动 CR7 到静止的 GELLO 当前目标，对齐完成后关闭准备会话，再启动服务端
 并等待就绪，最后启动主臂客户端。准备期间保持 GELLO 不动。服务端独占一个 SDK 连接；跟随期间不要另开 `status`、`power`、`movej` 等连接同一机械臂的命令。
 
 | 脚本参数 | 用途／默认值 |
@@ -101,6 +105,9 @@ uv run xcore-sdk-python follow-calibrate --ref-current \
 | `--hz` | 主臂读取与发送频率；`50` Hz |
 | `--port` | 本机 ZMQ 端口；`6001`，绑定 `127.0.0.1` |
 | `--max-speed-deg` | 跟随关节速度上限；`XCORE_FOLLOW_MAX_SPEED_DEG` 或 `3` °/s |
+| `--prepare-speed` | 启动对齐 SDK 速度；`XCORE_PREPARE_SPEED` 或 `1000` mm/s |
+| `--gripper-host` | 独立夹爪服务地址；可由 `XCORE_GRIPPER_HOST` 指定 |
+| `--arm-only` | 仅六轴，禁用环境变量中的夹爪配置 |
 | `--enable-motion` | 启用实际运动；默认只读预览 |
 | `--yes` | 跳过已确认现场条件后的交互确认 |
 
@@ -110,7 +117,7 @@ uv run xcore-sdk-python follow-calibrate --ref-current \
 加速度仍限制为 `40°/s²`，短距离运动可能达不到设定速度。调整后需重启跟随。
 
 跟随速度与 `movej --speed 1000` 是两个独立参数，单位分别为 °/s 和 mm/s。准备及跟随均选择与实际关节反馈最近的 2π 分支。`--enable-motion` 默认先
-以 `--prepare-speed 50`（mm/s 参数）、每段 `--prepare-motion-timeout 600` 秒
+以 `--prepare-speed 1000`（mm/s 参数）、每段 `--prepare-motion-timeout 600` 秒
 移动到主臂目标，软限位和每轴 `--prepare-max-step-deg 180` 角度差限制提前校验。
 正常准备直接对齐，不回零或改写标定。`--skip-prepare` 保持原手动对齐模式；
 RT 启动仍检查默认 `17.1887°` 闸门。客户端目标以 50 Hz 发送，驱动通过 SDK RT 回调平滑下发，带速度、加速度、软限位和断流检查。
@@ -209,7 +216,10 @@ CR7 记录格式只包含实测关节和夹爪，不记录 SDK 占位的零速�
 离线转换自动输出七维 `observation.state` / `action`，按观测时间重采样，
 另附实际采样率、反馈刷新频率和反馈年龄质量报告。
 
-此流程覆盖六轴跟随，夹爪联动与仿真显示未实现。依赖已锁定并安装，标定／驱动与脚本进程管理已通过离线测试；当前 Python 3.11 + SDK 0.7.1 的真机实时启停及连续跟随仍待现场验收。首次现场测试应从核对映射、静止启停和短行程低速跟随开始。
+六轴和独立夹爪的统一跟随已接入，CR7 接口仍保持六轴，夹爪由独立 TCP 系统控制。
+2026-10-08 已完成六轴实机跟随验证；新的默认对齐速度及独立夹爪实机联动尚待验收。
+可用 `uv run xcore-sdk-python gripper-check --gripper-host 127.0.0.1` 单独检查
+夹爪能力和真实位置，不连接 CR7，也不发送运动指令。
 
 ## 指令介绍
 

@@ -336,7 +336,9 @@ uv run xcore-sdk-python follow-calibrate --ref-current --save config/cr7_calib.j
 
 `scripts/start_gello_follow.sh --enable-motion` 默认先调用 `follow-prepare`，
 按已有标定读取静止 GELLO 目标，选择离实际 CR7 关节角最近的 2π 分支，
-通过低速 NRT `MoveAbsJ` 对齐。正常启动不经过零位、不修改标定；
+通过 NRT `MoveAbsJ` 对齐，默认 SDK 速度参数为 `1000 mm/s`，
+可用 `--prepare-speed`／`XCORE_PREPARE_SPEED` 单独调整，和实时跟随限速独立。
+正常启动不经过零位、不修改标定；
 `--skip-prepare` 保留手动对齐流程。
 
 `follow_prepare.py` 在变更电源前检查空闲状态、软限位和每轴角度差，
@@ -349,3 +351,9 @@ CLI 使用隔离 worker，自动为准备运动设置整体等待时间，中断
 把 CR7 归到全零后生成偏移。原有同姿态 `follow-calibrate --ref-current`
 继续可用。标定文件原子发布且不覆盖已有文件。
 控制器 README 给出只使用 shell 的首次和日常操作流程。
+
+控制器顶层入口默认启用独立夹爪，SDK 独立入口由 `--gripper-host` 或
+`XCORE_GRIPPER_HOST` 启用。脚本在准备和 CR7 SDK 会话之前调用
+`gripper-check`，只发送 `follow_status` 检查激活与实际反馈；
+`commands.execute` 的该分支不创建 CR7 会话。夹爪缺失不会退化为仅六轴，
+明确使用 `--arm-only` 才跳过夹爪；记录仍要求真实夹爪反馈。

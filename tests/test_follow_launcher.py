@@ -37,6 +37,9 @@ def launcher(tmp_path: Path) -> tuple[list[str], dict[str, str], Path]:
         "    f.write(json.dumps({'args': args, 'pid': os.getpid()}) + '\\n')\n"
         "if command in ('doctor', 'follow-check'):\n"
         "    print('{\"ok\": true}')\n"
+        "elif command == 'gripper-check':\n"
+        "    if os.environ.get('FAIL_GRIPPER'): sys.exit(8)\n"
+        "    print('{\"ok\": true}')\n"
         "elif command == 'follow-prepare':\n"
         "    if os.environ.get('FAIL_PREPARE'): sys.exit(9)\n"
         "    if os.environ.get('HOLD_PREPARE'):\n"
@@ -67,6 +70,8 @@ def launcher(tmp_path: Path) -> tuple[list[str], dict[str, str], Path]:
         "CALLS": str(calls),
     }
     env.pop("XCORE_FOLLOW_MAX_SPEED_DEG", None)
+    env.pop("XCORE_PREPARE_SPEED", None)
+    env.pop("XCORE_GRIPPER_HOST", None)
     cmd = [
         "bash",
         str(scripts / source.name),
@@ -213,8 +218,80 @@ def test_launcher_forwards_gripper_options_only_to_unified_client(launcher) -> N
     )
     assert result.returncode == 0, result.stderr + result.stdout
     calls = read_calls(path)
-    assert "--gripper-host" not in calls[2]["args"]
-    assert calls[3]["args"][-4:] == options
+    assert calls[0]["args"][1] == "gripper-check"
+    assert "--gripper-host" not in calls[3]["args"]
+    assert calls[4]["args"][-4:] == options
+
+
+@pytest.mark.parametrize("extra", [[], ["--skip-prepare"]])
+def test_missing_gripper_blocks_arm_start_even_when_preparation_is_skipped(
+    launcher, extra
+):
+    cmd, env, path = launcher
+    result = subprocess.run(
+        cmd + ["--enable-motion", "--yes", *extra],
+        env={**env, "XCORE_GRIPPER_HOST": "127.0.0.1", "FAIL_GRIPPER": "1"},
+        capture_output=True,
+        text=True,
+        timeout=8,
+    )
+    assert result.returncode == 1
+    assert [c["args"][1] for c in read_calls(path)] == ["gripper-check"]
+    assert "夹爪服务未就绪" in result.stderr
+
+
+def test_arm_only_overrides_default_gripper_without_checking_service(launcher):
+    cmd, env, path = launcher
+    result = subprocess.run(
+        cmd + ["--arm-only"],
+        env={**env, "XCORE_GRIPPER_HOST": "127.0.0.1", "FAIL_GRIPPER": "1"},
+        capture_output=True,
+        timeout=8,
+    )
+    assert result.returncode == 0
+    calls = read_calls(path)
+    assert "gripper-check" not in [c["args"][1] for c in calls]
+    assert "--gripper-host" not in calls[-1]["args"]
+
+
+def test_arm_only_conflicts_with_explicit_gripper_before_hardware_commands(launcher):
+    cmd, env, path = launcher
+    result = subprocess.run(
+        cmd + ["--arm-only", "--gripper-host", "127.0.0.1"],
+        env=env,
+        capture_output=True,
+        timeout=8,
+    )
+    assert result.returncode == 1
+    assert not path.exists()
+
+
+@pytest.mark.parametrize(
+    "configured, options, expected",
+    [
+        (None, [], "1000"),
+        ("800", [], "800"),
+        ("800", ["--prepare-speed", "1200"], "1200"),
+    ],
+)
+def test_alignment_speed_independent_of_realtime_limit(
+    launcher, configured, options, expected
+):
+    cmd, env, path = launcher
+    if configured:
+        env["XCORE_PREPARE_SPEED"] = configured
+    result = subprocess.run(
+        cmd + ["--enable-motion", "--yes", *options],
+        env=env,
+        capture_output=True,
+        timeout=8,
+    )
+    assert result.returncode == 0
+    calls = read_calls(path)
+    prepare = next(c["args"] for c in calls if c["args"][1] == "follow-prepare")
+    server = next(c["args"] for c in calls if c["args"][1] == "follow-server")
+    assert prepare[prepare.index("--speed") + 1] == expected
+    assert server[server.index("--max-speed-deg") + 1] == "3"
 
 
 def test_recording_client_inherits_keyboard_input(launcher) -> None:

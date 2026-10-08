@@ -139,13 +139,22 @@ def parser() -> argparse.ArgumentParser:
     prepare.add_argument("--calib", type=Path, default=Path("config/cr7_calib.json"))
     prepare.add_argument("--calibrate-zero", action="store_true")
     prepare.add_argument("--signs", type=int, nargs=6, choices=(-1, 1), default=[1] * 6)
-    prepare.add_argument("--speed", type=finite, default=50)
+    prepare.add_argument("--speed", type=finite, default=DEFAULT_SPEED)
     prepare.add_argument("--max-step-deg", type=finite, default=180)
     prepare.add_argument("--tolerance-deg", type=finite, default=0.2)
     prepare.add_argument("--motion-timeout", type=finite, default=600)
     prepare.add_argument("--gripper-host")
     prepare.add_argument("--gripper-port", type=int, default=5005)
     prepare.add_argument("--gripper-timeout", type=finite, default=0.75)
+
+    gripper_check = sub.add_parser(
+        "gripper-check",
+        parents=[common],
+        help="Check independent gripper feedback without connecting to CR7 or moving",
+    )
+    gripper_check.add_argument("--gripper-host", required=True)
+    gripper_check.add_argument("--gripper-port", type=int, default=5005)
+    gripper_check.add_argument("--gripper-timeout", type=finite, default=0.75)
 
     follow = sub.add_parser(
         "follow", parents=[common], help="Read GELLO leader and stream six CR7 joints"
@@ -264,6 +273,9 @@ def validate(args: argparse.Namespace, root: argparse.ArgumentParser) -> None:
             root.error("--timeout must exceed --motion-timeout + 2")
         if args.command == "move-joint" and abs(args.delta_deg) > args.max_step_deg:
             root.error("--delta-deg exceeds --max-step-deg")
+    if args.command == "gripper-check":
+        if not 1 <= args.gripper_port <= 65535 or args.gripper_timeout <= 0:
+            root.error("invalid gripper port or timeout")
     if args.command == "follow-prepare":
         if not 5 <= args.speed <= 4000:
             root.error("preparation speed must be in [5,4000] mm/s")

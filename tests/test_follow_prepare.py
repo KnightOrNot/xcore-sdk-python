@@ -107,7 +107,7 @@ def test_existing_calibration_aligns_directly_without_zeroing_or_recalibration(
     result = follow_prepare.prepare(args)
     assert len(arm.moves) == 1
     assert arm.moves[0][0] == pytest.approx([0.25] * 6)
-    assert arm.moves[0][1]["speed"] == 50
+    assert arm.moves[0][1]["speed"] == 1000
     assert "zero_motion" not in result
     assert not result["calibrated_zero"]
     assert args["calib"].read_bytes() == before

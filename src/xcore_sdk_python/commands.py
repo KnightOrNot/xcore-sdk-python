@@ -19,6 +19,14 @@ def execute(options: dict[str, Any]) -> dict[str, Any]:
         from .follow_prepare import prepare
 
         return prepare(options)
+    if command == "gripper-check":
+        from .gripper_follow import GripperFollowClient
+
+        return GripperFollowClient(
+            options["gripper_host"],
+            options["gripper_port"],
+            options["gripper_timeout"],
+        ).check()
     driver_commands = {"power", "mode", "stop", "movej", "move-joint"}
     client = RobotDriver if command in driver_commands else RobotConnection
     with client(

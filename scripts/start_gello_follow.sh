@@ -16,7 +16,7 @@ enable_motion=false
 assume_yes=false
 skip_prepare=false
 calibrate_zero=false
-prepare_speed=50
+prepare_speed="${XCORE_PREPARE_SPEED:-1000}"
 prepare_motion_timeout=600
 prepare_max_step_deg=180
 prepare_pid=""
@@ -25,6 +25,9 @@ server_pid=""
 client_pid=""
 session_dir=""
 gripper_options=()
+gripper_host="${XCORE_GRIPPER_HOST:-}"
+gripper_host_explicit=false
+arm_only=false
 
 usage() {
     cat <<'EOF'
@@ -40,15 +43,18 @@ usage() {
   --max-speed-deg V    CR7 跟随关节速度上限，0 < V <= 75 °/s，默认 3
                        也可设置环境变量 XCORE_FOLLOW_MAX_SPEED_DEG
   --enable-motion      启用实际跟随（否则 dry-run）
-                       默认先低速对齐到 GELLO 当前姿态，再进入实时跟随
+                       默认先对齐到 GELLO 当前姿态，再进入实时跟随
   --skip-prepare       已手动对齐时跳过移动准备，仍校验启动姿态
   --calibrate-zero     首次标定：GELLO 保持六轴零位，CR7 归零后保存偏移
                        已有标定不能覆盖；正常启动不归零、不重新标定
-  --prepare-speed V    启动对齐 MoveAbsJ 速度，默认 50 mm/s
+  --prepare-speed V    启动对齐 MoveAbsJ 速度，默认 1000 mm/s
+                       也可设置环境变量 XCORE_PREPARE_SPEED
   --prepare-motion-timeout S 每段准备运动等待时间，默认 600 s
   --prepare-max-step-deg V   每轴准备运动最大角度差，默认 180°
   --yes                跳过启用运动的交互确认
   --gripper-host HOST  同时跟随外接夹爪；同机服务使用 127.0.0.1
+                       可设置 XCORE_GRIPPER_HOST；控制器顶层入口默认 127.0.0.1
+  --arm-only          仅六轴跟随，禁用环境变量中的夹爪配置
   --gripper-port PORT  夹爪 TCP 端口，默认 5005
   --gripper-id ID      GELLO 扳机 ID，默认 7
   --gripper-open-deg V / --gripper-close-deg V   扳机角度端点，默认 194.8 / 153
@@ -117,7 +123,10 @@ while (( $# > 0 )); do
         --raw-data-root|--task|--session-path-file|--record-queue-size|--record-feedback-max-age)
             [[ $# -ge 2 ]] || fail "$1 缺少参数"
             gripper_options+=("$1" "$2"); shift 2 ;;
-        --gripper-host|--gripper-port|--gripper-timeout)
+        --gripper-host)
+            gripper_host="${2:?缺少夹爪地址}"; gripper_host_explicit=true; shift 2 ;;
+        --arm-only) arm_only=true; shift ;;
+        --gripper-port|--gripper-timeout)
             [[ $# -ge 2 ]] || fail "$1 缺少参数"
             prepare_gripper_options+=("$1" "$2")
             gripper_options+=("$1" "$2"); shift 2 ;;
@@ -128,6 +137,15 @@ while (( $# > 0 )); do
         *) usage >&2; fail "未知参数：$1" ;;
     esac
 done
+
+if [[ "$arm_only" == true ]]; then
+    [[ "$gripper_host_explicit" == false ]] || fail "--arm-only 不能与 --gripper-host 同时使用"
+    gripper_host=""
+fi
+if [[ -n "$gripper_host" ]]; then
+    prepare_gripper_options=(--gripper-host "$gripper_host" "${prepare_gripper_options[@]}")
+    gripper_options=(--gripper-host "$gripper_host" "${gripper_options[@]}")
+fi
 
 for task_command in uv flock setsid; do
     command -v "$task_command" >/dev/null || fail "未安装 $task_command"
@@ -161,6 +179,13 @@ validate(prepare, root)
 PY
 
 echo "六轴实时跟随：速度上限 ${max_speed_deg} °/s，加速度上限 40 °/s²；启动对齐速度 ${prepare_speed} mm/s。"
+if [[ -n "$gripper_host" ]]; then
+    echo "夹爪跟随已启用：先检查独立夹爪服务，再连接 CR7 或读取 GELLO。"
+    "${xcore[@]}" gripper-check "${prepare_gripper_options[@]}" 9>&- || \
+        fail "夹爪服务未就绪；请在夹爪 USB/RS485 所在电脑运行 start_gripper.sh，或用 --gripper-host 指定地址；仅六轴测试使用 --arm-only"
+else
+    echo "仅六轴跟随：未启用夹爪。"
+fi
 echo "[1/3] 检查 SDK、标定与 GELLO 只读反馈"
 "${xcore[@]}" doctor 9>&-
 if [[ "$calibrate_zero" != true ]]; then
@@ -179,7 +204,7 @@ session_dir="$(mktemp -d "$sdk_dir/logs/follow-$(date +%Y%m%d-%H%M%S)-XXXXXX")"
 if [[ "$enable_motion" == true && "$skip_prepare" == false ]]; then
     prepare_options=()
     [[ "$calibrate_zero" != true ]] || prepare_options=(--calibrate-zero)
-    echo "[准备] 按标定低速移动到 GELLO 当前目标；保持主臂不动，单段最多等待 ${prepare_motion_timeout}s。"
+    echo "[准备] 按标定移动到 GELLO 当前目标，SDK 速度 ${prepare_speed} mm/s；保持主臂不动，单段最多等待 ${prepare_motion_timeout}s。"
     PYTHONUNBUFFERED=1 setsid "${xcore[@]}" follow-prepare \
         --ip "$robot_ip" --local-ip "$local_ip" --serial "$gello_port" --calib "$calib" \
         --speed "$prepare_speed" --motion-timeout "$prepare_motion_timeout" \
