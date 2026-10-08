@@ -98,6 +98,20 @@ class RobotConnection:
             "extra_sdk_values": extra,
         }
 
+    def controller_logs(self) -> list[dict[str, Any]]:
+        entries = self.call(
+            "queryControllerLog",
+            10,
+            {self.sdk.LogInfoLevel.error, self.sdk.LogInfoLevel.warning},
+        )
+        return [
+            {
+                key: getattr(entry, key)
+                for key in ("id", "timestamp", "content", "repair")
+            }
+            for entry in entries
+        ]
+
     def pose(self, frame: str = "flange") -> dict[str, Any]:
         coordinate = (
             self.sdk.CoordinateType.flangeInBase

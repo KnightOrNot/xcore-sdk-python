@@ -77,6 +77,12 @@ class RobotDriver(RobotConnection):
             self.call("moveStart")
             deadline = time.monotonic() + motion_timeout
             while time.monotonic() < deadline:
+                power = self.call("powerState")
+                if power != self.sdk.PowerState.on:
+                    raise XCoreError(
+                        f"Motion stopped by controller: power state {power.name}; "
+                        "read controller-logs for the fault code"
+                    )
                 state = self.call("operationState")
                 actual = self.joints()["rad"]
                 error = max(abs(a - b) for a, b in zip(actual, target, strict=True))

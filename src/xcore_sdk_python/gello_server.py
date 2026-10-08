@@ -133,8 +133,14 @@ class ZmqRobotClient:
         self._socket.connect(f"tcp://{host}:{port}")
 
     def call(self, method: str, **args: Any) -> Any:
-        self._socket.send(pickle.dumps({"method": method, "args": args}))
-        result = pickle.loads(self._socket.recv())
+        try:
+            self._socket.send(pickle.dumps({"method": method, "args": args}))
+            result = pickle.loads(self._socket.recv())
+        except self._zmq.Again as exc:
+            raise RuntimeError(
+                f"CR7 service timed out during {method}; "
+                "check the server/controller error"
+            ) from exc
         if isinstance(result, dict) and "error" in result:
             raise RuntimeError(result["error"])
         return result

@@ -22,6 +22,7 @@ prepare_max_step_deg=180
 prepare_pid=""
 prepare_gripper_options=()
 server_pid=""
+log_pid=""
 client_pid=""
 session_dir=""
 gripper_options=()
@@ -58,7 +59,7 @@ usage() {
   --prepare-motion-timeout S 每段准备运动等待时间，默认 600 s
   --prepare-max-step-deg V   每轴准备运动最大角度差，默认 180°
   --yes                跳过启用运动的交互确认
-  --no-return-zero     禁用 Ctrl+C 退出后的六轴回零；默认回零，速度沿用 --prepare-speed
+  --no-return-zero     禁用 Ctrl+C／故障退出后的六轴回零；默认回零，速度沿用 --prepare-speed
   --show-state         显示每帧主／从臂与夹爪状态；默认不循环打印
   --gripper-host HOST  同时跟随外接夹爪；同机服务使用 127.0.0.1
                        可设置 XCORE_GRIPPER_HOST；控制器顶层入口默认启用夹爪
@@ -114,14 +115,34 @@ cleanup() {
     stop_group "$client_pid"
     stop_group "$server_pid"
     stop_group "$prepare_pid"
+    # tail --pid drains the final server errors after the SDK process exits.
+    if [[ -n "$log_pid" ]]; then
+        wait "$log_pid" 2>/dev/null || true
+        log_pid=""
+    fi
+    local fault_exit=false
+    local recovery_options=()
+    if [[ "$motion_started" == true ]] && (( exit_code != 0 && exit_code != 130 && exit_code != 143 )); then
+        fault_exit=true
+        return_zero_requested=true
+    fi
+    if [[ "$fault_exit" == true ]] || { [[ -f "$session_dir/server.log" ]] && grep -Fq '!! 安全中止' "$session_dir/server.log"; }; then
+        recovery_options=(--recover)
+        if [[ "$shutdown_ok" == true ]]; then
+            echo "[故障详情] 原始退出码 $exit_code；以下为控制器最近错误／警告（含历史时间戳）：" >&2
+            "${xcore[@]}" controller-logs --ip "$robot_ip" --local-ip "$local_ip" --timeout 10 9>&- || \
+                echo "控制器日志读取失败；请查看 server.log 和示教器。" >&2
+        fi
+    fi
     if [[ "$return_zero_requested" == true && "$motion_started" == true && "$return_zero_enabled" == true ]]; then
         if [[ "$shutdown_ok" == true ]]; then
+            [[ "$fault_exit" != true ]] || echo "[故障回零] 记录已关闭；尝试恢复实时故障一次，再回零，不自动重启跟随。" >&2
             echo "[退出回零] 跟随会话已关闭；六轴返回 0°，SDK 速度 ${prepare_speed} mm/s。再次 Ctrl+C 可停止回零。"
             trap cancel_return_zero INT TERM USR1
             PYTHONUNBUFFERED=1 setsid "${xcore[@]}" return-zero \
                 --ip "$robot_ip" --local-ip "$local_ip" --speed "$prepare_speed" \
                 --motion-timeout "$prepare_motion_timeout" \
-                --output "$session_dir/return-zero.json" 9>&- &
+                --output "$session_dir/return-zero.json" "${recovery_options[@]}" 9>&- &
             zero_pid=$!
             [[ "$zero_cancelled" == false ]] || cancel_return_zero
             while true; do
@@ -134,7 +155,8 @@ cleanup() {
                 echo "回零已取消；请核对从臂实际姿态。" >&2
             elif (( zero_result != 0 )); then
                 echo "回零失败；请核对示教器与从臂实际姿态。" >&2
-                exit_code=1
+                "${xcore[@]}" controller-logs --ip "$robot_ip" --local-ip "$local_ip" --timeout 10 9>&- || true
+                (( exit_code != 0 && exit_code != 130 )) || exit_code=1
             else
                 echo "[退出回零] 六轴已到达 0°。"
             fi
@@ -243,7 +265,7 @@ if [[ "$enable_motion" == true && "$assume_yes" != true ]]; then
     if [[ "$calibrate_zero" == true ]]; then
         echo "首次标定要求 GELLO 处于六轴 0° 姿态；CR7 将先归到六轴 0°。"
     fi
-    echo "Ctrl+C 结束实验时默认六轴回到 0°；确认回零路径，或使用 --no-return-zero。"
+    echo "Ctrl+C 或故障退出时默认六轴回到 0°；确认回零路径，或使用 --no-return-zero。"
     read -r -p "将准备对齐并启用跟随；准备期间保持 GELLO 不动，确认运动范围后输入 y：" answer
     [[ "$answer" == y || "$answer" == yes ]] || { echo "已取消。"; exit 0; }
 fi
@@ -291,7 +313,9 @@ for ((attempt=0; attempt<300; attempt++)); do
     sleep 0.1
 done
 [[ "$server_ready" == true ]] || { cat "$session_dir/server.log" >&2; fail "服务端 30 秒内未就绪"; }
-cat "$session_dir/server.log"
+# Stream startup and fault messages to the terminal, without per-frame output.
+setsid tail -n +1 --pid="$server_pid" -f "$session_dir/server.log" 9>&- >&2 &
+log_pid=$!
 
 echo "[3/3] 启动 GELLO 客户端；按 Ctrl+C 停止客户端和服务端"
 PYTHONUNBUFFERED=1 setsid "${xcore[@]}" follow --port "$server_port" \

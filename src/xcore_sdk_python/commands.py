@@ -38,6 +38,8 @@ def execute(options: dict[str, Any]) -> dict[str, Any]:
     ) as arm:
         if command in ("status", "info", "joints", "limits"):
             return getattr(arm, command)()
+        if command == "controller-logs":
+            return {"logs": arm.controller_logs()}
         if command == "pose":
             return arm.pose(options["frame"])
         if command == "dh":

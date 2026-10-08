@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import os
 import signal
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,7 @@ def run_client(args: Any) -> int:
     gripper = None
     recorder = None
     keyboard = None
+    primary_error = None
     old_term = signal.signal(signal.SIGTERM, _interrupt)
     try:
         agent = Cr7LeaderAgent(
@@ -204,35 +206,49 @@ def run_client(args: Any) -> int:
     except KeyboardInterrupt:
         print("\nStopping leader client; server watchdog will stop on command timeout.")
         return 0
+    except Exception as exc:
+        primary_error = exc
+        print(f"[跟随错误] {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        raise
     finally:
         # uv may forward the same group termination to Python again. Cleanup
         # must finish the gripper stop acknowledgement and recorder flush.
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        cleanup_errors = []
+
+        def clean(label, operation):
+            try:
+                operation()
+            except Exception as exc:
+                cleanup_errors.append(exc)
+                print(
+                    f"[{label}] {type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
         try:
             if keyboard is not None:
-                keyboard.close()
+                clean("键盘清理错误", keyboard.close)
+            if gripper is not None:
+                clean("夹爪停止错误", gripper.close)
+                clean("夹爪跟随错误", gripper.check)
+            if agent is not None:
+                clean("GELLO 关闭错误", agent.close)
+            if client is not None:
+                clean("CR7 客户端关闭错误", client.close)
+            if recorder is not None and recorder.is_recording:
+
+                def finish_recording():
+                    print(
+                        f"Unfinished episode retained: {recorder.close_interrupted()}"
+                    )
+
+                clean("记录关闭错误", finish_recording)
         finally:
-            try:
-                if gripper is not None:
-                    gripper.close()
-                    gripper.check()
-            finally:
-                try:
-                    if agent is not None:
-                        agent.close()
-                finally:
-                    try:
-                        if client is not None:
-                            client.close()
-                    finally:
-                        try:
-                            if recorder is not None and recorder.is_recording:
-                                print(
-                                    "Unfinished episode retained: "
-                                    f"{recorder.close_interrupted()}"
-                                )
-                        finally:
-                            signal.signal(signal.SIGTERM, old_term)
+            signal.signal(signal.SIGTERM, old_term)
+        if cleanup_errors and primary_error is None:
+            raise cleanup_errors[0]
 
 
 def _interrupt(*_args: Any) -> None:

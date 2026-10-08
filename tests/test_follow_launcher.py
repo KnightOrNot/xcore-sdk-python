@@ -40,6 +40,8 @@ def launcher(tmp_path: Path) -> tuple[list[str], dict[str, str], Path]:
         "elif command == 'gripper-check':\n"
         "    if os.environ.get('FAIL_GRIPPER'): sys.exit(8)\n"
         "    print('{\"ok\": true}')\n"
+        "elif command == 'controller-logs':\n"
+        '    print(\'{"logs": [{"id":30401,"content":"2轴发生碰撞停止运行"}]}\')\n'
         "elif command == 'follow-prepare':\n"
         "    if os.environ.get('FAIL_PREPARE'): sys.exit(9)\n"
         "    if os.environ.get('HOLD_PREPARE'):\n"
@@ -52,6 +54,10 @@ def launcher(tmp_path: Path) -> tuple[list[str], dict[str, str], Path]:
         "    if os.environ.get('FAIL_SERVER'):\n"
         "        sys.exit(7)\n"
         "    print('CR7 follow server: fake', flush=True)\n"
+        "    if os.environ.get('RT_FAULT'):\n"
+        "        time.sleep(.4)\n"
+        "        print('!! 安全中止：实时模式报告运动错误', flush=True)\n"
+        "        sys.exit(7)\n"
         "    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
         "    while True: time.sleep(.02)\n"
         "elif command == 'return-zero':\n"
@@ -70,6 +76,7 @@ def launcher(tmp_path: Path) -> tuple[list[str], dict[str, str], Path]:
         "    with open(output, 'w') as f: f.write('{\"reached\": true}')\n"
         "    print('{\"ok\": true}')\n"
         "elif command == 'follow':\n"
+        "    if os.environ.get('RT_FAULT'): time.sleep(.8)\n"
         "    if os.environ.get('CHECK_STDIN'):\n"
         "        assert sys.stdin.read(1) == 'r', 'recording stdin lost'\n"
         "    if os.environ.get('HOLD_CLIENT'):\n"
@@ -358,6 +365,8 @@ def test_failed_preparation_never_starts_rt_server_or_client(launcher):
         "doctor",
         "follow-check",
         "follow-prepare",
+        "controller-logs",
+        "return-zero",
     ]
     assert_children_stopped(read_calls(path))
 
@@ -504,13 +513,25 @@ def test_zero_failure_is_reported_and_second_interrupt_stops_zero(launcher, canc
             process.wait()
 
 
-def test_motion_fault_does_not_trigger_a_new_zero_move(launcher):
+@pytest.mark.parametrize("disabled", [False, True])
+def test_motion_fault_displays_details_then_recovers_zero_after_shutdown(
+    launcher, disabled
+):
     cmd, env, path = launcher
     result = subprocess.run(
-        cmd + ["--enable-motion", "--yes"],
-        env={**env, "CLIENT_EXIT": "3"},
+        cmd + ["--enable-motion", "--yes"] + (["--no-return-zero"] if disabled else []),
+        env={**env, "CLIENT_EXIT": "3", "RT_FAULT": "1"},
         capture_output=True,
+        text=True,
         timeout=8,
     )
     assert result.returncode == 3
-    assert "return-zero" not in [c["args"][1] for c in read_calls(path)]
+    calls = read_calls(path)
+    assert "安全中止" in result.stderr
+    assert "30401" in result.stdout and "2轴发生碰撞" in result.stdout
+    if disabled:
+        assert calls[-1]["args"][1] == "controller-logs"
+    else:
+        assert [c["args"][1] for c in calls[-2:]] == ["controller-logs", "return-zero"]
+        assert "--recover" in calls[-1]["args"]
+    assert_children_stopped(calls)

@@ -1,8 +1,46 @@
 import math
+from types import SimpleNamespace
 
 import pytest
 
 from xcore_sdk_python import RobotConnection, RobotDriver, XCoreError
+
+
+def test_controller_logs_keep_error_code_timestamp_and_repair(fake, monkeypatch):
+    sdk, robot = fake
+    sdk.LogInfoLevel = SimpleNamespace(error="error", warning="warning")
+    entry = SimpleNamespace(
+        id=30401,
+        timestamp="2026-10-08 16:02:55",
+        content="2轴发生碰撞停止运行",
+        repair="检查工具质量和质心",
+    )
+
+    def query(count, levels, ec):
+        assert count == 10 and levels == {"error", "warning"}
+        ec.update(ec=0)
+        return [entry]
+
+    monkeypatch.setattr(robot, "queryControllerLog", query)
+    arm = RobotConnection("192.168.2.160", sdk=sdk, robot=robot)
+    assert arm.controller_logs() == [vars(entry)]
+
+
+def test_move_aborts_promptly_if_controller_powers_off(fake, monkeypatch):
+    sdk, robot = fake
+    robot.reach_target = False
+
+    def start(ec):
+        ec.update(ec=0)
+        robot.power = sdk.PowerState.off
+
+    monkeypatch.setattr(robot, "moveStart", start)
+    arm = RobotDriver("192.168.2.160", sdk=sdk, robot=robot)
+    with pytest.raises(
+        XCoreError, match="Motion stopped by controller: power state off"
+    ):
+        arm.movej([0.1] * 6, motion_timeout=600)
+    assert robot.calls[-1] == "stop"
 
 
 def test_query_session_does_not_issue_preparation_commands(fake):

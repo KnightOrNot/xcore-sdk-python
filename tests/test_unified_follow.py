@@ -173,6 +173,59 @@ def test_unified_client_routes_one_sample_to_two_endpoints(monkeypatch, tmp_path
     arm.close.assert_called_once()
 
 
+@pytest.mark.parametrize("recording", [False, True])
+def test_arm_error_survives_gripper_cleanup_error_and_recording_closes(
+    monkeypatch, tmp_path, capsys, recording
+):
+    calibration = tmp_path / "calib.json"
+    calibration.write_text(
+        json.dumps({"joint_offsets": [0] * 6, "joint_signs": [1] * 6})
+    )
+    args = parser().parse_args(
+        ["follow", "--calib", str(calibration), "--yes", "--gripper-host", "127.0.0.1"]
+        + (
+            ["--raw-data-root", str(tmp_path / "raw"), "--start-recording"]
+            if recording
+            else []
+        )
+    )
+    agent = Mock()
+    agent.q_without_branch.return_value = np.zeros(6)
+    agent.get_joint_state.return_value = np.zeros(7)
+    arm = Mock()
+
+    def command(method, **_):
+        if method == "command_joint_state":
+            raise RuntimeError("CR7 service timed out during command_joint_state")
+        return 6 if method == "num_dofs" else np.zeros(6)
+
+    arm.call.side_effect = command
+    worker = Mock()
+    worker.check.side_effect = [None, RuntimeError("Leader target stream timed out")]
+    transport = Mock()
+    transport.check.return_value = {}
+    monkeypatch.setattr(gello_leader, "Cr7LeaderAgent", Mock(return_value=agent))
+    monkeypatch.setattr(gello_client, "ZmqRobotClient", Mock(return_value=arm))
+    monkeypatch.setattr(
+        gello_client, "GripperFollowClient", Mock(return_value=transport)
+    )
+    monkeypatch.setattr(gello_client, "GripperFollower", Mock(return_value=worker))
+    monkeypatch.setattr(gello_client, "RecordingKeyboard", Mock())
+    with pytest.raises(RuntimeError, match="CR7 service timed out"):
+        gello_client.run_client(args)
+    stderr = capsys.readouterr().err
+    assert (
+        "CR7 service timed out" in stderr and "Leader target stream timed out" in stderr
+    )
+    worker.close.assert_called_once()
+    agent.close.assert_called_once()
+    arm.close.assert_called_once()
+    if recording:
+        partials = list((tmp_path / "raw").rglob("*.jsonl.partial"))
+        assert len(partials) == 1
+        assert not list((tmp_path / "raw").rglob("episode_*.jsonl"))
+
+
 @pytest.mark.parametrize("show_state", [False, True])
 def test_state_output_does_not_change_arm_commands(
     monkeypatch, tmp_path, capsys, show_state

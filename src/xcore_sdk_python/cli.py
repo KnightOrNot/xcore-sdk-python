@@ -63,6 +63,7 @@ def parser() -> argparse.ArgumentParser:
         ("info", "Read model, controller version and serial number"),
         ("joints", "Read all six joint angles in radians and degrees"),
         ("limits", "Read controller soft limits"),
+        ("controller-logs", "Read the latest controller errors and warnings"),
         ("stop", "Request a controlled stop"),
         ("check", "Run offline tests and lint checks"),
     ):
@@ -157,6 +158,11 @@ def parser() -> argparse.ArgumentParser:
     zero.add_argument("--max-step-deg", type=finite, default=360)
     zero.add_argument("--tolerance-deg", type=finite, default=0.2)
     zero.add_argument("--motion-timeout", type=finite, default=600)
+    zero.add_argument(
+        "--recover",
+        action="store_true",
+        help="Recover stopped RT once before zeroing; finish powered off/manual",
+    )
 
     gripper_check = sub.add_parser(
         "gripper-check",
@@ -406,6 +412,8 @@ def isolated(options: dict[str, Any]) -> dict[str, Any]:
             grace=10 if options["command"] in ("follow-prepare", "return-zero") else 1,
         )
         raise
+    if errors.strip():
+        print(errors.rstrip(), file=sys.stderr, flush=True)
     for line in reversed(output.splitlines()):
         if line.startswith(RESULT_PREFIX):
             return json.loads(line[len(RESULT_PREFIX) :])
