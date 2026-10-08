@@ -28,6 +28,12 @@ gripper_options=()
 gripper_host="${XCORE_GRIPPER_HOST:-}"
 gripper_host_explicit=false
 arm_only=false
+return_zero_enabled=true
+return_zero_requested=false
+motion_started=false
+shutdown_ok=true
+zero_pid=""
+zero_cancelled=false
 
 usage() {
     cat <<'EOF'
@@ -52,6 +58,7 @@ usage() {
   --prepare-motion-timeout S 每段准备运动等待时间，默认 600 s
   --prepare-max-step-deg V   每轴准备运动最大角度差，默认 180°
   --yes                跳过启用运动的交互确认
+  --no-return-zero     禁用 Ctrl+C 退出后的六轴回零；默认回零，速度沿用 --prepare-speed
   --show-state         显示每帧主／从臂与夹爪状态；默认不循环打印
   --gripper-host HOST  同时跟随外接夹爪；同机服务使用 127.0.0.1
                        可设置 XCORE_GRIPPER_HOST；控制器顶层入口默认启用夹爪
@@ -83,6 +90,7 @@ stop_group() {
             sleep 0.1
         done
         if kill -0 -- "-$task_pid" 2>/dev/null; then
+            shutdown_ok=false
             echo "进程 $task_pid 未及时结束，正在终止；请核对示教器状态。" >&2
             kill -KILL -- "-$task_pid" 2>/dev/null || true
         fi
@@ -90,18 +98,56 @@ stop_group() {
     wait "$task_pid" 2>/dev/null || true
 }
 
+cancel_return_zero() {
+    zero_cancelled=true
+    trap '' INT TERM USR1
+    echo "正在停止回零，请等待 SDK 停机与会话关闭。" >&2
+    [[ -z "$zero_pid" ]] || kill -TERM -- "-$zero_pid" 2>/dev/null || true
+}
+
 cleanup() {
     local exit_code=$?
-    trap - EXIT INT TERM
+    trap - EXIT
+    # Repeated interrupts must not cut off SDK cleanup before the new session.
+    trap '' INT TERM USR1
     # Stop leader targets first, then allow the RT server to finish its loop.
     stop_group "$client_pid"
     stop_group "$server_pid"
     stop_group "$prepare_pid"
+    if [[ "$return_zero_requested" == true && "$motion_started" == true && "$return_zero_enabled" == true ]]; then
+        if [[ "$shutdown_ok" == true ]]; then
+            echo "[退出回零] 跟随会话已关闭；六轴返回 0°，SDK 速度 ${prepare_speed} mm/s。再次 Ctrl+C 可停止回零。"
+            trap cancel_return_zero INT TERM USR1
+            PYTHONUNBUFFERED=1 setsid "${xcore[@]}" return-zero \
+                --ip "$robot_ip" --local-ip "$local_ip" --speed "$prepare_speed" \
+                --motion-timeout "$prepare_motion_timeout" \
+                --output "$session_dir/return-zero.json" 9>&- &
+            zero_pid=$!
+            [[ "$zero_cancelled" == false ]] || cancel_return_zero
+            while true; do
+                if wait "$zero_pid"; then zero_result=0; else zero_result=$?; fi
+                kill -0 "$zero_pid" 2>/dev/null || break
+            done
+            zero_pid=""
+            trap '' INT TERM USR1
+            if [[ "$zero_cancelled" == true ]]; then
+                echo "回零已取消；请核对从臂实际姿态。" >&2
+            elif (( zero_result != 0 )); then
+                echo "回零失败；请核对示教器与从臂实际姿态。" >&2
+                exit_code=1
+            else
+                echo "[退出回零] 六轴已到达 0°。"
+            fi
+        else
+            echo "SDK 子进程未正常停止，已跳过回零；请核对示教器。" >&2
+            exit_code=1
+        fi
+    fi
     [[ -z "$session_dir" ]] || echo "服务端日志：$session_dir/server.log"
     exit "$exit_code"
 }
 trap cleanup EXIT
-trap 'exit 130' INT
+trap 'return_zero_requested=true; exit 130' INT USR1
 trap 'exit 143' TERM
 
 while (( $# > 0 )); do
@@ -115,6 +161,7 @@ while (( $# > 0 )); do
         --max-speed-deg) max_speed_deg="${2:?--max-speed-deg 缺少数值}"; shift 2 ;;
         --enable-motion) enable_motion=true; shift ;;
         --yes) assume_yes=true; shift ;;
+        --no-return-zero) return_zero_enabled=false; shift ;;
         --skip-prepare) skip_prepare=true; shift ;;
         --calibrate-zero) calibrate_zero=true; shift ;;
         --prepare-speed) prepare_speed="${2:?缺少准备速度}"; shift 2 ;;
@@ -196,12 +243,14 @@ if [[ "$enable_motion" == true && "$assume_yes" != true ]]; then
     if [[ "$calibrate_zero" == true ]]; then
         echo "首次标定要求 GELLO 处于六轴 0° 姿态；CR7 将先归到六轴 0°。"
     fi
+    echo "Ctrl+C 结束实验时默认六轴回到 0°；确认回零路径，或使用 --no-return-zero。"
     read -r -p "将准备对齐并启用跟随；准备期间保持 GELLO 不动，确认运动范围后输入 y：" answer
     [[ "$answer" == y || "$answer" == yes ]] || { echo "已取消。"; exit 0; }
 fi
 
 mkdir -p "$sdk_dir/logs"
 session_dir="$(mktemp -d "$sdk_dir/logs/follow-$(date +%Y%m%d-%H%M%S)-XXXXXX")"
+[[ "$enable_motion" == false ]] || motion_started=true
 if [[ "$enable_motion" == true && "$skip_prepare" == false ]]; then
     prepare_options=()
     [[ "$calibrate_zero" != true ]] || prepare_options=(--calibrate-zero)

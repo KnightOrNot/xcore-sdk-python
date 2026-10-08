@@ -147,6 +147,17 @@ def parser() -> argparse.ArgumentParser:
     prepare.add_argument("--gripper-port", type=int, default=5005)
     prepare.add_argument("--gripper-timeout", type=finite, default=0.75)
 
+    zero = sub.add_parser(
+        "return-zero",
+        parents=[copy.deepcopy(common)],
+        help="Return all six CR7 joints to zero in an exclusive SDK session",
+    )
+    zero.set_defaults(timeout=None)
+    zero.add_argument("--speed", type=finite, default=DEFAULT_SPEED)
+    zero.add_argument("--max-step-deg", type=finite, default=360)
+    zero.add_argument("--tolerance-deg", type=finite, default=0.2)
+    zero.add_argument("--motion-timeout", type=finite, default=600)
+
     gripper_check = sub.add_parser(
         "gripper-check",
         parents=[common],
@@ -251,6 +262,8 @@ def validate(args: argparse.Namespace, root: argparse.ArgumentParser) -> None:
     args.local_ip = args.local_ip or ""
     if args.command == "follow-prepare" and args.timeout is None:
         args.timeout = 2 * args.motion_timeout + 30
+    if args.command == "return-zero" and args.timeout is None:
+        args.timeout = args.motion_timeout + 30
     if args.timeout <= 0:
         root.error("--timeout must be positive")
     if args.output and args.output.exists():
@@ -276,6 +289,13 @@ def validate(args: argparse.Namespace, root: argparse.ArgumentParser) -> None:
             root.error("--timeout must exceed --motion-timeout + 2")
         if args.command == "move-joint" and abs(args.delta_deg) > args.max_step_deg:
             root.error("--delta-deg exceeds --max-step-deg")
+    if args.command == "return-zero":
+        if not 5 <= args.speed <= 4000:
+            root.error("return-zero speed must be in [5, 4000] mm/s")
+        if min(args.max_step_deg, args.tolerance_deg, args.motion_timeout) <= 0:
+            root.error("return-zero limits and timeouts must be positive")
+        if args.timeout <= args.motion_timeout + 10:
+            root.error("return-zero timeout must exceed motion timeout plus 10s")
     if args.command == "gripper-check":
         if not 1 <= args.gripper_port <= 65535 or args.gripper_timeout <= 0:
             root.error("invalid gripper port or timeout")
@@ -381,7 +401,10 @@ def isolated(options: dict[str, Any]) -> dict[str, Any]:
             json.dumps(options), timeout=options["timeout"]
         )
     except (subprocess.TimeoutExpired, KeyboardInterrupt):
-        terminate(child, grace=10 if options["command"] == "follow-prepare" else 1)
+        terminate(
+            child,
+            grace=10 if options["command"] in ("follow-prepare", "return-zero") else 1,
+        )
         raise
     for line in reversed(output.splitlines()):
         if line.startswith(RESULT_PREFIX):

@@ -111,6 +111,7 @@ SDK 的独立脚本默认仅六轴，可用 `--gripper-host` 或 `XCORE_GRIPPER_
 | `--arm-only` | 仅六轴，禁用环境变量中的夹爪配置 |
 | `--enable-motion` | 启用实际运动；默认只读预览 |
 | `--yes` | 跳过已确认现场条件后的交互确认 |
+| `--no-return-zero` | 禁用 Ctrl+C 后的六轴自动回零；默认启用 |
 
 例如 `./scripts/start_gello_follow.sh --enable-motion --max-speed-deg 10` 设置
 每轴最高 `10°/s`；命令行优先于环境变量，启动时显示实际限速。
@@ -128,7 +129,13 @@ SDK 的独立脚本默认仅六轴，可用 `--gripper-host` 或 `XCORE_GRIPPER_
 初始对齐检查、控制指令、录制时实际反馈读取和故障检查继续执行。
 RT 启动仍检查默认 `17.1887°` 闸门。客户端目标以 50 Hz 发送，驱动通过 SDK RT 回调平滑下发，带速度、加速度、软限位和断流检查。
 
-按 **Ctrl+C** 结束。脚本先结束主臂客户端，再请求服务端关闭；驱动请求 RT 回调结束、`stopMove`、恢复 NRT／manual 并断开连接。不会自动回零或下电；退出后核对示教器状态。服务端日志留在 `logs/follow-*/server.log`。
+按 **Ctrl+C** 结束真机跟随。脚本先停止主臂客户端及夹爪，关闭实时和准备 SDK
+会话，再建立独占会话，将 CR7 六轴移动到 `[0°,0°,0°,0°,0°,0°]`。
+回零速度和等待时间沿用 `--prepare-speed`／`--prepare-motion-timeout`，
+默认 `4000 mm/s`／`600 s`，保持软限位检查；完成后恢复回零前的电源状态和操作模式。
+夹爪只停止，不自动释放。回零期间再次 Ctrl+C 会停止回零，等待停机后退出。
+`--no-return-zero` 可禁用此动作；只读预览、故障退出、SIGTERM 或强制清理不会回零。
+服务端日志留在 `logs/follow-*/server.log`，成功回零结果在 `return-zero.json`。
 
 ### 3. 独立 CLI 入口（调试）
 

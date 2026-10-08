@@ -54,6 +54,21 @@ def launcher(tmp_path: Path) -> tuple[list[str], dict[str, str], Path]:
         "    print('CR7 follow server: fake', flush=True)\n"
         "    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
         "    while True: time.sleep(.02)\n"
+        "elif command == 'return-zero':\n"
+        "    with open(os.environ['CALLS']) as f:\n"
+        "        previous = [json.loads(line) for line in f]\n"
+        "    for call in previous:\n"
+        "        if call['args'][1] in ('follow-prepare', 'follow-server', 'follow'):\n"
+        "            try: os.kill(call['pid'], 0)\n"
+        "            except ProcessLookupError: continue\n"
+        "            raise RuntimeError('zero overlapped a follow session')\n"
+        "    if os.environ.get('FAIL_ZERO'): sys.exit(6)\n"
+        "    if os.environ.get('HOLD_ZERO'):\n"
+        "        signal.signal(signal.SIGTERM, lambda *_: sys.exit(130))\n"
+        "        while True: time.sleep(.02)\n"
+        "    output = args[args.index('--output')+1]\n"
+        "    with open(output, 'w') as f: f.write('{\"reached\": true}')\n"
+        "    print('{\"ok\": true}')\n"
         "elif command == 'follow':\n"
         "    if os.environ.get('CHECK_STDIN'):\n"
         "        assert sys.stdin.read(1) == 'r', 'recording stdin lost'\n"
@@ -379,7 +394,13 @@ def test_first_zero_calibration_uses_sh_entry_without_existing_calibration(launc
     assert "--calibrate-zero" in calls[1]["args"]
 
 
-def test_interrupt_during_preparation_stops_owned_process_before_rt_start(launcher):
+@pytest.mark.parametrize(
+    "interrupt, expected_zero, code",
+    [(signal.SIGTERM, False, 143), (signal.SIGINT, True, 130)],
+)
+def test_interrupt_during_preparation_stops_owned_process_before_rt_start(
+    launcher, interrupt, expected_zero, code
+):
     cmd, env, path = launcher
     process = subprocess.Popen(
         cmd + ["--enable-motion", "--yes"],
@@ -392,17 +413,104 @@ def test_interrupt_during_preparation_stops_owned_process_before_rt_start(launch
         while not path.exists() or len(read_calls(path)) < 3:
             assert time.monotonic() < deadline
             time.sleep(0.02)
-        process.send_signal(signal.SIGTERM)
+        process.send_signal(interrupt)
         process.communicate(timeout=8)
-        assert process.returncode == 143
+        assert process.returncode == code
         calls = read_calls(path)
         assert [c["args"][1] for c in calls] == [
             "doctor",
             "follow-check",
             "follow-prepare",
-        ]
+        ] + (["return-zero"] if expected_zero else [])
         assert_children_stopped(calls)
     finally:
         if process.poll() is None:
             process.kill()
             process.wait()
+
+
+@pytest.mark.parametrize(
+    "options, interrupt, should_zero, exit_code",
+    [
+        (["--enable-motion", "--yes"], signal.SIGINT, True, 130),
+        (["--enable-motion", "--yes", "--skip-prepare"], signal.SIGUSR1, True, 130),
+        (["--enable-motion", "--yes", "--no-return-zero"], signal.SIGINT, False, 130),
+        ([], signal.SIGINT, False, 130),
+        (["--enable-motion", "--yes"], signal.SIGTERM, False, 143),
+    ],
+)
+def test_user_interrupt_returns_zero_only_after_exclusive_shutdown(
+    launcher, options, interrupt, should_zero, exit_code
+):
+    cmd, env, path = launcher
+    process = subprocess.Popen(
+        cmd + options,
+        env={**env, "HOLD_CLIENT": "1"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not path.exists() or read_calls(path)[-1]["args"][1] != "follow":
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        process.send_signal(interrupt)
+        stdout, stderr = process.communicate(timeout=8)
+        assert process.returncode == exit_code, stdout + stderr
+        calls = read_calls(path)
+        assert (calls[-1]["args"][1] == "return-zero") is should_zero
+        if should_zero:
+            zero = calls[-1]["args"]
+            assert zero[zero.index("--speed") + 1] == "4000"
+            assert "--serial" not in zero and "--gripper-host" not in zero
+        assert_children_stopped(calls)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_zero_failure_is_reported_and_second_interrupt_stops_zero(launcher, cancel):
+    cmd, env, path = launcher
+    process = subprocess.Popen(
+        cmd + ["--enable-motion", "--yes"],
+        env={**env, "HOLD_CLIENT": "1", "HOLD_ZERO" if cancel else "FAIL_ZERO": "1"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not path.exists() or read_calls(path)[-1]["args"][1] != "follow":
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        process.send_signal(signal.SIGINT)
+        if cancel:
+            while read_calls(path)[-1]["args"][1] != "return-zero":
+                assert time.monotonic() < deadline
+                time.sleep(0.02)
+            process.send_signal(signal.SIGINT)
+        stdout, stderr = process.communicate(timeout=8)
+        assert process.returncode == (130 if cancel else 1), stdout + stderr
+        assert ("回零已取消" if cancel else "回零失败") in stderr
+        for call in read_calls(path):
+            with pytest.raises(ProcessLookupError):
+                os.kill(call["pid"], 0)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
+def test_motion_fault_does_not_trigger_a_new_zero_move(launcher):
+    cmd, env, path = launcher
+    result = subprocess.run(
+        cmd + ["--enable-motion", "--yes"],
+        env={**env, "CLIENT_EXIT": "3"},
+        capture_output=True,
+        timeout=8,
+    )
+    assert result.returncode == 3
+    assert "return-zero" not in [c["args"][1] for c in read_calls(path)]

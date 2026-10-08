@@ -89,13 +89,14 @@ def test_invalid_recording_options_rejected_before_devices_open(options):
 
 
 @pytest.mark.parametrize(
-    "stale,cleanup_error",
+    "stale,cleanup_error,save",
     [
-        (False, None),
-        (True, None),
-        (False, "leader"),
-        (False, "arm"),
-        (False, "gripper"),
+        (False, None, True),
+        (False, None, False),
+        (True, None, False),
+        (False, "leader", False),
+        (False, "arm", False),
+        (False, "gripper", False),
     ],
 )
 def test_follow_records_actual_arm_and_gripper_and_saves_only_on_s(
@@ -103,6 +104,7 @@ def test_follow_records_actual_arm_and_gripper_and_saves_only_on_s(
     monkeypatch,
     stale,
     cleanup_error,
+    save,
 ):
     calibration = tmp_path / "calib.json"
     calibration.write_text(
@@ -157,7 +159,7 @@ def test_follow_records_actual_arm_and_gripper_and_saves_only_on_s(
     }
     monkeypatch.setattr(gello_client, "GripperFollower", Mock(return_value=worker))
     keyboard = Mock()
-    keyboard.poll.side_effect = [None, None, None if cleanup_error else "s"]
+    keyboard.poll.side_effect = [None, None, "s" if save else None]
     monkeypatch.setattr(gello_client, "RecordingKeyboard", Mock(return_value=keyboard))
     if cleanup_error:
         devices = {"leader": agent, "arm": arm, "gripper": worker}
@@ -174,7 +176,7 @@ def test_follow_records_actual_arm_and_gripper_and_saves_only_on_s(
 
     episodes = list(Path(session).joinpath("episodes").iterdir())
     assert len(episodes) == 1
-    if stale or cleanup_error:
+    if stale or cleanup_error or not save:
         assert episodes[0].name.endswith(".partial")
         if cleanup_error:
             assert len(episodes[0].read_text().splitlines()) == 2
@@ -189,3 +191,32 @@ def test_follow_records_actual_arm_and_gripper_and_saves_only_on_s(
     arm.close.assert_called_once()
     agent.close.assert_called_once()
     keyboard.close.assert_called_once()
+    if not stale and not cleanup_error:
+        # The real recording loop has closed its writer before the exit move.
+        # Verify both saved and interrupted raw episodes remain byte-identical.
+        from test_follow_prepare import Arm
+
+        from xcore_sdk_python import return_zero as zero_module
+
+        raw_files = {
+            path: path.read_bytes()
+            for path in Path(session).rglob("*")
+            if path.is_file()
+        }
+        home_arm = Arm()
+        monkeypatch.setattr(zero_module, "RobotDriver", Mock(return_value=home_arm))
+        monkeypatch.setattr(
+            "xcore_sdk_python.follow_prepare.time.sleep", lambda _: None
+        )
+        zero_args = parser().parse_args(["return-zero"])
+        validate(zero_args, parser())
+        assert zero_module.return_zero(vars(zero_args))["reached"]
+        assert home_arm.q == [0.0] * 6
+        assert raw_files == {
+            path: path.read_bytes()
+            for path in Path(session).rglob("*")
+            if path.is_file()
+        }
+        rows = [json.loads(line) for line in episodes[0].read_text().splitlines()]
+        assert len(rows) == 2
+        assert all(row["joint_positions"][:6] == [-0.3] * 6 for row in rows)
