@@ -261,3 +261,40 @@ def test_missing_gripper_service_is_rejected_before_robot_connection(
     with pytest.raises(RuntimeError, match="gripper unavailable"):
         follow_prepare.prepare(args)
     factory.assert_not_called()
+
+
+def test_repeated_termination_does_not_interrupt_worker_cleanup():
+    import signal
+    import subprocess
+    import sys
+
+    code = """
+import signal,time
+from xcore_sdk_python.worker import _interrupt
+signal.signal(signal.SIGTERM,_interrupt)
+try:
+    print('ready',flush=True)
+    time.sleep(10)
+except KeyboardInterrupt:
+    print('cleanup_started',flush=True)
+    time.sleep(.3)
+    print('cleanup_finished',flush=True)
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-u", "-c", code],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert process.stdout.readline().strip() == "ready"
+        process.send_signal(signal.SIGTERM)
+        assert process.stdout.readline().strip() == "cleanup_started"
+        process.send_signal(signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=3)
+        assert process.returncode == 0, stderr
+        assert "cleanup_finished" in stdout
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()

@@ -12,6 +12,9 @@ RESULT_PREFIX = "XCORE_RESULT:"
 
 
 def _interrupt(signum: int, frame: object) -> None:
+    # Group termination can also be forwarded by the parent runner. A second
+    # signal must not interrupt the robot's stop/idle/power restoration.
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
     raise KeyboardInterrupt
 
 
