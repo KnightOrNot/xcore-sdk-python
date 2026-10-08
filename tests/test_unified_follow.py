@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import signal
 import socketserver
+import subprocess
+import sys
 import threading
 import time
 from unittest.mock import Mock
@@ -302,3 +305,112 @@ def test_invalid_gripper_settings_rejected_before_opening_devices(options):
     args = root.parse_args(["follow", *options])
     with pytest.raises(SystemExit):
         validate(args, root)
+
+
+@pytest.mark.parametrize("record", [False, True])
+def test_repeated_termination_finishes_gripper_stop_before_client_exits(
+    tmp_path, record
+):
+    """Run the real client/worker over TCP while mocking only arm and leader."""
+    entered, release = threading.Event(), threading.Event()
+    commands = []
+    active = False
+
+    class Handler(socketserver.StreamRequestHandler):
+        def handle(self):
+            nonlocal active
+            request = json.loads(self.rfile.readline())
+            command = request["cmd"]
+            commands.append(command)
+            if command == "set_target":
+                active = True
+                entered.set()
+                assert release.wait(3)
+            elif command == "stop":
+                active = False
+            state = {
+                "streaming": True,
+                "stream_error": None,
+                "status_code": 0x31,
+                "position_raw": 100,
+            }
+            self.wfile.write(
+                (json.dumps({"ok": True, "result": state}) + "\n").encode()
+            )
+
+    calibration = tmp_path / "calib.json"
+    calibration.write_text(
+        json.dumps({"joint_offsets": [0] * 6, "joint_signs": [1] * 6})
+    )
+    code = """
+import sys,time,numpy as np
+from unittest.mock import Mock
+from xcore_sdk_python import gello_client,gello_leader
+from xcore_sdk_python.cli import parser
+from xcore_sdk_python.gripper_follow import GripperFollower
+class LoggedFollower(GripperFollower):
+    def close(self):
+        print('cleanup_started',flush=True)
+        super().close()
+gello_client.GripperFollower=LoggedFollower
+agent=Mock()
+agent.q_without_branch.return_value=np.zeros(6)
+agent.get_joint_state.return_value=np.array([0.1]*6+[0.5])
+gello_leader.Cr7LeaderAgent=Mock(return_value=agent)
+arm=Mock()
+def call(command,**kwargs):
+    if command=='num_dofs': return 6
+    if command=='get_observations':
+        return {'joint_positions':[-0.2]*6,'joint_state_time_ns':time.monotonic_ns()}
+    return [0.0]*6
+arm.call.side_effect=call
+gello_client.ZmqRobotClient=Mock(return_value=arm)
+result=gello_client.run_client(parser().parse_args(sys.argv[1:]))
+print('cleanup_finished',flush=True)
+sys.exit(result)
+"""
+    with socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        options = [
+            "follow",
+            "--yes",
+            "--calib",
+            str(calibration),
+            "--gripper-host",
+            "127.0.0.1",
+            "--gripper-port",
+            str(server.server_address[1]),
+            "--gripper-timeout",
+            "2",
+            "--gripper-stale-timeout",
+            "4",
+        ]
+        if record:
+            options += ["--raw-data-root", str(tmp_path / "raw"), "--start-recording"]
+        process = subprocess.Popen(
+            [sys.executable, "-u", "-c", code, *options],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            assert entered.wait(3)
+            process.send_signal(signal.SIGTERM)
+            while process.stdout.readline().strip() != "cleanup_started":
+                assert process.poll() is None
+            process.send_signal(signal.SIGTERM)
+            release.set()
+            output, error = process.communicate(timeout=5)
+            assert process.returncode == 0, output + error
+            assert "cleanup_finished" in output
+            assert commands[-1] == "stop" and not active
+            if record:
+                assert len(list((tmp_path / "raw").rglob("*.jsonl.partial"))) == 1
+        finally:
+            release.set()
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            server.shutdown()
+            thread.join(timeout=2)

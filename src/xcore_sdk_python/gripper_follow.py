@@ -14,6 +14,12 @@ import time
 from typing import Any
 
 
+class GripperStreamFault(RuntimeError):
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(f"Gripper stream fault: {reason}")
+
+
 class GripperFollowClient:
     def __init__(self, host: str, port: int, timeout: float) -> None:
         self.host, self.port, self.timeout = host, port, timeout
@@ -40,7 +46,7 @@ class GripperFollowClient:
         if state.get("streaming") is not True:
             raise RuntimeError("Update the gripper server to support set_target")
         if state.get("stream_error"):
-            raise RuntimeError(f"Gripper stream fault: {state['stream_error']}")
+            raise GripperStreamFault(str(state["stream_error"]))
         code, pos = state.get("status_code"), state.get("position_raw")
         if not isinstance(code, int) or code & 0x31 != 0x31:
             raise RuntimeError("Gripper is not activated; start its server first")

@@ -205,6 +205,9 @@ def run_client(args: Any) -> int:
         print("\nStopping leader client; server watchdog will stop on command timeout.")
         return 0
     finally:
+        # uv may forward the same group termination to Python again. Cleanup
+        # must finish the gripper stop acknowledgement and recorder flush.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         try:
             if keyboard is not None:
                 keyboard.close()
@@ -222,13 +225,16 @@ def run_client(args: Any) -> int:
                         if client is not None:
                             client.close()
                     finally:
-                        signal.signal(signal.SIGTERM, old_term)
-                        if recorder is not None and recorder.is_recording:
-                            print(
-                                "Unfinished episode retained: "
-                                f"{recorder.close_interrupted()}"
-                            )
+                        try:
+                            if recorder is not None and recorder.is_recording:
+                                print(
+                                    "Unfinished episode retained: "
+                                    f"{recorder.close_interrupted()}"
+                                )
+                        finally:
+                            signal.signal(signal.SIGTERM, old_term)
 
 
 def _interrupt(*_args: Any) -> None:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
     raise KeyboardInterrupt
