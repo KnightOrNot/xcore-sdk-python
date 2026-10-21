@@ -149,6 +149,33 @@ def test_invalid_motion_is_rejected_before_mode_or_power_change(hardware, proble
     leader.close.assert_called_once()
 
 
+@pytest.mark.parametrize("outside", ["current", "target"])
+def test_controller_valid_but_following_invalid_posture_is_rejected(hardware, outside):
+    args, arm, leader, _ = hardware
+    angle = math.radians(183.5)
+    if outside == "current":
+        arm.q[0] = angle
+    else:
+        arm.q[0] = math.radians(175)
+        # The nearest branch remains +183.5, inside controller ±360 but
+        # outside following ±180. It must not be moved/clipped/wrapped.
+        leader.read_raw_rad.return_value[0] = angle + 0.2
+    with pytest.raises(XCoreError, match=r"following soft limits: J1\(\+183.5"):
+        follow_prepare.prepare(args)
+    assert not arm.moves
+    assert arm.events == ["disconnect"]
+    leader.close.assert_called_once()
+
+
+def test_following_limit_boundary_is_allowed_and_reported(hardware):
+    args, arm, leader, _ = hardware
+    arm.q[0] = math.radians(175)
+    leader.read_raw_rad.return_value[0] = math.pi + 0.2
+    result = follow_prepare.prepare(args)
+    assert arm.moves[0][0][0] == pytest.approx(math.pi)
+    assert result["follow_limits_rad"][0] == pytest.approx([-math.pi, math.pi])
+
+
 def test_interrupted_motion_stops_waits_for_idle_and_restores_initial_state(hardware):
     args, arm, leader, _ = hardware
     arm.fail_move = True

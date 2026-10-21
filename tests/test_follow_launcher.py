@@ -24,6 +24,17 @@ def launcher(tmp_path: Path) -> tuple[list[str], dict[str, str], Path]:
     serial.touch()
     calib = tmp_path / "calib.json"
     calib.write_text(json.dumps({"joint_offsets": [0] * 6, "joint_signs": [1] * 6}))
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "exit_pose.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "robot_ip": "192.168.2.160",
+                "joints_rad": [0.3, 0.1, -0.4, 0.2, -0.7, -0.01],
+            }
+        )
+    )
     uv = tmp_path / "uv"
     uv.write_text(
         f"#!{sys.executable}\n"
@@ -60,7 +71,7 @@ def launcher(tmp_path: Path) -> tuple[list[str], dict[str, str], Path]:
         "        sys.exit(7)\n"
         "    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
         "    while True: time.sleep(.02)\n"
-        "elif command == 'return-zero':\n"
+        "elif command in ('return-zero', 'return-pose'):\n"
         "    with open(os.environ['CALLS']) as f:\n"
         "        previous = [json.loads(line) for line in f]\n"
         "    for call in previous:\n"
@@ -94,6 +105,7 @@ def launcher(tmp_path: Path) -> tuple[list[str], dict[str, str], Path]:
     env.pop("XCORE_FOLLOW_MAX_SPEED_DEG", None)
     env.pop("XCORE_PREPARE_SPEED", None)
     env.pop("XCORE_GRIPPER_HOST", None)
+    env.pop("XCORE_EXIT_POSE", None)
     cmd = [
         "bash",
         str(scripts / source.name),
@@ -366,7 +378,7 @@ def test_failed_preparation_never_starts_rt_server_or_client(launcher):
         "follow-check",
         "follow-prepare",
         "controller-logs",
-        "return-zero",
+        "return-pose",
     ]
     assert_children_stopped(read_calls(path))
 
@@ -430,7 +442,7 @@ def test_interrupt_during_preparation_stops_owned_process_before_rt_start(
             "doctor",
             "follow-check",
             "follow-prepare",
-        ] + (["return-zero"] if expected_zero else [])
+        ] + (["return-pose"] if expected_zero else [])
         assert_children_stopped(calls)
     finally:
         if process.poll() is None:
@@ -468,7 +480,7 @@ def test_user_interrupt_returns_zero_only_after_exclusive_shutdown(
         stdout, stderr = process.communicate(timeout=8)
         assert process.returncode == exit_code, stdout + stderr
         calls = read_calls(path)
-        assert (calls[-1]["args"][1] == "return-zero") is should_zero
+        assert (calls[-1]["args"][1] == "return-pose") is should_zero
         if should_zero:
             zero = calls[-1]["args"]
             assert zero[zero.index("--speed") + 1] == "4000"
@@ -497,13 +509,13 @@ def test_zero_failure_is_reported_and_second_interrupt_stops_zero(launcher, canc
             time.sleep(0.02)
         process.send_signal(signal.SIGINT)
         if cancel:
-            while read_calls(path)[-1]["args"][1] != "return-zero":
+            while read_calls(path)[-1]["args"][1] != "return-pose":
                 assert time.monotonic() < deadline
                 time.sleep(0.02)
             process.send_signal(signal.SIGINT)
         stdout, stderr = process.communicate(timeout=8)
         assert process.returncode == (130 if cancel else 1), stdout + stderr
-        assert ("回零已取消" if cancel else "回零失败") in stderr
+        assert ("返回已取消" if cancel else "返回失败") in stderr
         for call in read_calls(path):
             with pytest.raises(ProcessLookupError):
                 os.kill(call["pid"], 0)
@@ -532,6 +544,47 @@ def test_motion_fault_displays_details_then_recovers_zero_after_shutdown(
     if disabled:
         assert calls[-1]["args"][1] == "controller-logs"
     else:
-        assert [c["args"][1] for c in calls[-2:]] == ["controller-logs", "return-zero"]
+        assert [c["args"][1] for c in calls[-2:]] == ["controller-logs", "return-pose"]
         assert "--recover" in calls[-1]["args"]
     assert_children_stopped(calls)
+
+
+def test_missing_exit_pose_rejects_before_hardware_commands(launcher):
+    cmd, env, path = launcher
+    (path.parent / "config/exit_pose.json").unlink()
+    result = subprocess.run(
+        cmd + ["--enable-motion", "--yes"], env=env, capture_output=True, timeout=8
+    )
+    assert result.returncode != 0
+    assert not path.exists()
+
+
+def test_exit_pose_is_snapshotted_before_motion_and_kept_fixed(launcher):
+    cmd, env, path = launcher
+    source = path.parent / "config/exit_pose.json"
+    expected = json.loads(source.read_text())
+    process = subprocess.Popen(
+        cmd + ["--enable-motion", "--yes"],
+        env={**env, "HOLD_CLIENT": "1"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not path.exists() or read_calls(path)[-1]["args"][1] != "follow":
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        source.write_text(json.dumps({**expected, "joints_rad": [0] * 6}))
+        process.send_signal(signal.SIGINT)
+        process.communicate(timeout=8)
+        assert process.returncode == 130
+        command = read_calls(path)[-1]["args"]
+        assert command[1] == "return-pose"
+        snapshot = Path(command[command.index("--pose-file") + 1])
+        assert json.loads(snapshot.read_text()) == expected
+        assert snapshot != source
+        assert_children_stopped(read_calls(path))
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()

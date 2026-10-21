@@ -208,10 +208,17 @@ def test_follow_records_actual_arm_and_gripper_and_saves_only_on_s(
         monkeypatch.setattr(
             "xcore_sdk_python.follow_prepare.time.sleep", lambda _: None
         )
-        zero_args = parser().parse_args(["return-zero"])
+        target = [0.2, -0.3, 0.4, -0.5, 0.6, -0.7]
+        pose_path = tmp_path / "exit_pose.json"
+        pose_path.write_text(
+            json.dumps(
+                {"schema_version": 1, "robot_ip": "192.168.2.160", "joints_rad": target}
+            )
+        )
+        zero_args = parser().parse_args(["return-pose", "--pose-file", str(pose_path)])
         validate(zero_args, parser())
         assert zero_module.return_zero(vars(zero_args))["reached"]
-        assert home_arm.q == [0.0] * 6
+        assert home_arm.q == target
         assert raw_files == {
             path: path.read_bytes()
             for path in Path(session).rglob("*")

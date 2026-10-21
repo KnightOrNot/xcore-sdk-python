@@ -96,16 +96,22 @@ def run_server(args: Any) -> int:
             f"{'motion armed on first target' if args.enable_motion else 'dry-run'}",
             flush=True,
         )
-        while not stopping.is_set() and bot.abort_reason() is None:
+        while not stopping.is_set():
             try:
                 request = pickle.loads(socket.recv())
             except zmq.Again:
+                if bot.abort_reason() is not None:
+                    break
                 continue
             try:
+                if reason := bot.abort_reason():
+                    raise RuntimeError(reason)
                 response = dispatch(bot, request)
             except Exception as exc:
                 response = {"error": f"{type(exc).__name__}: {exc}"}
             socket.send(pickle.dumps(response))
+            if bot.abort_reason() is not None:
+                break
         return 1 if bot.abort_reason() else 0
     finally:
         if bot is not None:

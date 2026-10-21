@@ -16,6 +16,7 @@ from typing import Any
 from .driver import DEFAULT_SPEED
 from .exceptions import XCoreError
 from .network import configure_address, diagnose
+from .return_zero import DEFAULT_EXIT_POSE, load_exit_pose
 from .worker import RESULT_PREFIX
 
 
@@ -149,19 +150,27 @@ def parser() -> argparse.ArgumentParser:
     prepare.add_argument("--gripper-timeout", type=finite, default=0.75)
 
     zero = sub.add_parser(
-        "return-zero",
+        "return-pose",
+        aliases=["return-zero"],
         parents=[copy.deepcopy(common)],
-        help="Return all six CR7 joints to zero in an exclusive SDK session",
+        help="Return to the saved exit posture (return-zero is a legacy alias)",
     )
     zero.set_defaults(timeout=None)
     zero.add_argument("--speed", type=finite, default=DEFAULT_SPEED)
     zero.add_argument("--max-step-deg", type=finite, default=360)
     zero.add_argument("--tolerance-deg", type=finite, default=0.2)
     zero.add_argument("--motion-timeout", type=finite, default=600)
+    pose_target = zero.add_mutually_exclusive_group()
+    pose_target.add_argument("--pose-file", type=Path, default=DEFAULT_EXIT_POSE)
+    pose_target.add_argument(
+        "--zero",
+        action="store_true",
+        help="Explicitly return to six zero angles instead of the saved exit pose",
+    )
     zero.add_argument(
         "--recover",
         action="store_true",
-        help="Recover stopped RT once before zeroing; finish powered off/manual",
+        help="Recover stopped RT once before returning; finish powered off/manual",
     )
 
     gripper_check = sub.add_parser(
@@ -268,7 +277,7 @@ def validate(args: argparse.Namespace, root: argparse.ArgumentParser) -> None:
     args.local_ip = args.local_ip or ""
     if args.command == "follow-prepare" and args.timeout is None:
         args.timeout = 2 * args.motion_timeout + 30
-    if args.command == "return-zero" and args.timeout is None:
+    if args.command in ("return-pose", "return-zero") and args.timeout is None:
         args.timeout = args.motion_timeout + 30
     if args.timeout <= 0:
         root.error("--timeout must be positive")
@@ -295,13 +304,22 @@ def validate(args: argparse.Namespace, root: argparse.ArgumentParser) -> None:
             root.error("--timeout must exceed --motion-timeout + 2")
         if args.command == "move-joint" and abs(args.delta_deg) > args.max_step_deg:
             root.error("--delta-deg exceeds --max-step-deg")
-    if args.command == "return-zero":
+    if args.command in ("return-pose", "return-zero"):
         if not 5 <= args.speed <= 4000:
             root.error("return-zero speed must be in [5, 4000] mm/s")
         if min(args.max_step_deg, args.tolerance_deg, args.motion_timeout) <= 0:
             root.error("return-zero limits and timeouts must be positive")
         if args.timeout <= args.motion_timeout + 10:
             root.error("return-zero timeout must exceed motion timeout plus 10s")
+        if not args.zero and (
+            args.command == "return-pose"
+            or args.pose_file.exists()
+            or args.pose_file != DEFAULT_EXIT_POSE
+        ):
+            try:
+                load_exit_pose(args.pose_file, args.ip)
+            except (OSError, ValueError, XCoreError) as exc:
+                root.error(f"Invalid exit pose: {exc}")
     if args.command == "gripper-check":
         if not 1 <= args.gripper_port <= 65535 or args.gripper_timeout <= 0:
             root.error("invalid gripper port or timeout")
@@ -409,7 +427,9 @@ def isolated(options: dict[str, Any]) -> dict[str, Any]:
     except (subprocess.TimeoutExpired, KeyboardInterrupt):
         terminate(
             child,
-            grace=10 if options["command"] in ("follow-prepare", "return-zero") else 1,
+            grace=10
+            if options["command"] in ("follow-prepare", "return-zero", "return-pose")
+            else 1,
         )
         raise
     if errors.strip():
@@ -482,6 +502,8 @@ def main(argv: list[str] | None = None) -> int:
     options.pop("output")
     if args.command == "follow-prepare":
         options["calib"] = str(args.calib)
+    if args.command in ("return-pose", "return-zero"):
+        options["pose_file"] = str(args.pose_file)
     try:
         if args.command == "network":
             result = (

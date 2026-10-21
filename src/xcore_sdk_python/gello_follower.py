@@ -14,6 +14,8 @@ from typing import Dict, Optional, Sequence
 
 import numpy as np
 
+from .follow_limits import intersect_soft_limits, limit_violation, local_soft_limits
+
 # Reference speed table; the callback cap is conservative for the slowest axis.
 JOINT_SPEED_LIMIT_DEG = (120.0, 120.0, 180.0, 180.0, 200.0, 200.0)
 DEFAULT_ARM_DOFS = 6
@@ -28,9 +30,6 @@ CB_STALL_S = 0.5
 DEFAULT_MOVEJ_SPEED = 0.1  # zero-distance RT initialization
 DEFAULT_TRACK_TOL_RAD = 0.15
 DEFAULT_TRACK_TIMEOUT = 1.0
-# Conservative local bounds, intersected with actual controller limits.
-DEFAULT_SOFT_LO_DEG = (-180.0, -130.0, -165.0, -175.0, -175.0, -175.0)
-DEFAULT_SOFT_HI_DEG = (+180.0, +130.0, +135.0, +175.0, +175.0, +175.0)
 
 
 def approach_step(dist, v_prev, dt, v_max, a_max, max_step, deadband):
@@ -72,43 +71,21 @@ def approach_step(dist, v_prev, dt, v_max, a_max, max_step, deadband):
 KP_APPROACH = 6.0  # 比例增益 1/s（接近目标的时间常数 ≈1/KP）
 
 
-def _soft_pair(v, default_deg, dofs, which):
-    """None→默认表；标量→广播；序列→逐轴。统一成弧度数组（长度 dofs）。"""
-    if v is None:
-        base = np.radians(np.asarray(default_deg, dtype=float))
-        if base.size < dofs:
-            base = np.full(dofs, base[0] if base.size else math.radians(175.0))
-        return base[:dofs].copy()
-    a = np.asarray(v, dtype=float).ravel()
-    if a.size == 1:
-        return np.full(dofs, float(a[0]))
-    if a.size != dofs:
-        raise ValueError(f"软限位{which}维度须为 1 或 {dofs}，收到 {a.size}")
-    return a.copy()
-
-
 def resolve_soft_limits(
     robot, sdk, ec, dofs, soft_lo_rad, soft_hi_rad, check_ctrl_limit=True, verbose=True
 ):
     """Intersect local and controller limits; reject missing or invalid feedback."""
-    lo = _soft_pair(soft_lo_rad, DEFAULT_SOFT_LO_DEG, dofs, "下限")
-    hi = _soft_pair(soft_hi_rad, DEFAULT_SOFT_HI_DEG, dofs, "上限")
-    if not np.all(np.isfinite(lo)) or not np.all(np.isfinite(hi)):
-        raise ValueError("Local soft limits must be finite")
+    lo, hi = local_soft_limits(dofs, soft_lo_rad, soft_hi_rad)
     if check_ctrl_limit:
         buf = sdk.PyTypeVectorArrayDouble2()
         enabled = robot.getSoftLimit(buf, ec)
-        if not enabled:
-            raise RuntimeError("Controller soft limits are disabled")
-        ctrl = np.asarray(buf.content(), dtype=float)
-        if ctrl.shape != (dofs, 2) or not np.all(np.isfinite(ctrl)):
-            raise RuntimeError("Invalid controller soft-limit feedback")
-        if np.any(ctrl[:, 0] > ctrl[:, 1]):
-            raise RuntimeError("Controller soft-limit bounds are reversed")
-        lo = np.maximum(lo, ctrl[:, 0])
-        hi = np.minimum(hi, ctrl[:, 1])
-    if np.any(lo > hi):
-        raise ValueError("Local and controller soft limits do not overlap")
+        lo, hi = intersect_soft_limits(
+            buf.content(),
+            enabled=enabled,
+            dofs=dofs,
+            soft_lo_rad=soft_lo_rad,
+            soft_hi_rad=soft_hi_rad,
+        )
     if verbose:
         print(
             "CR7 effective soft limits (deg):",
@@ -302,6 +279,13 @@ class GelloCr7Robot:
                 )
 
         with self._lock:
+            if self._abort_reason is not None:
+                raise RuntimeError(self._abort_reason)
+            if self._enable_motion_requested and not self._motion_active:
+                reason = self._arming_error(self._state, clamped)
+                if reason is not None:
+                    self._set_abort(reason)
+                    raise RuntimeError(reason)
             self._target = clamped
             self._target_time = time.time()
             self._n_commands += 1
@@ -491,33 +475,35 @@ class GelloCr7Robot:
             time.sleep(slack)
 
     # ------------------------------------------------------------------ 内部：上电跟随序列
-    def _arm_motion(self, q: np.ndarray, target: np.ndarray) -> bool:
-        """启动对齐闸门 + 上电序列。成功返回 True。"""
+    def _arming_error(self, q: np.ndarray, target: np.ndarray) -> str | None:
+        """Check cached feedback synchronously, then recheck before RT startup."""
         # 软限位前置检查：若真机**当前**就站在限位之外，起跟后第一周期
         # `np.clip(q + delta, lo, hi)` 会立刻把该关节往限位内拉 —— 那是一段
         # 不受控的小幅运动（操作者手没动，臂却动了）。与其悄悄拉一把，直接拒绝并指名关节。
-        outside = np.where((q < self._soft_lo - 1e-9) | (q > self._soft_hi + 1e-9))[0]
-        if outside.size:
-            bad = [
-                f"J{i + 1}({math.degrees(q[i]):+.1f}° 限 "
-                f"{math.degrees(self._soft_lo[i]):+.0f}~{math.degrees(self._soft_hi[i]):+.0f}°)"
-                for i in outside
-            ]
-            self._set_abort(
-                f"拒绝启动：真机当前姿态已在逐轴软限位之外 —— {', '.join(bad)}。"
+        bad = limit_violation(q, self._soft_lo, self._soft_hi)
+        if bad is not None:
+            return (
+                f"拒绝启动：真机当前姿态已在逐轴软限位之外 —— {bad}。"
                 f"起跟会把这些关节拉回限位内（不受控运动）。"
                 f"请先在示教器上将真机调整至允许范围，再重新核对两臂姿态。"
             )
-            return False
 
         diff = float(np.max(np.abs(target - q)))
         if diff > self._arm_gate:
             bad = np.where(np.abs(target - q) > self._arm_gate)[0].tolist()
-            self._set_abort(
+            return (
                 f"拒绝启动：leader 与真机姿态差 {diff:.3f} rad > 闸门 {self._arm_gate} rad，"
                 f"越界关节 {bad}。请先把两臂摆到接近的姿态再启动。"
             )
+        return None
+
+    def _arm_motion(self, q: np.ndarray, target: np.ndarray) -> bool:
+        """启动对齐闸门 + 上电序列。成功返回 True。"""
+        reason = self._arming_error(q, target)
+        if reason is not None:
+            self._set_abort(reason)
             return False
+        diff = float(np.max(np.abs(target - q)))
 
         sdk, robot, ec = self._sdk, self._robot, self._ec
         try:

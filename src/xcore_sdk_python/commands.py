@@ -19,10 +19,10 @@ def execute(options: dict[str, Any]) -> dict[str, Any]:
         from .follow_prepare import prepare
 
         return prepare(options)
-    if command == "return-zero":
-        from .return_zero import return_zero
+    if command in ("return-zero", "return-pose"):
+        from .return_zero import return_pose
 
-        return return_zero(options)
+        return return_pose(options)
     if command == "gripper-check":
         from .gripper_follow import GripperFollowClient
 

@@ -16,6 +16,7 @@ import numpy as np
 from .calibration import load_calibration, reference_offsets
 from .driver import RobotDriver
 from .exceptions import XCoreError
+from .follow_limits import intersect_soft_limits, limit_violation
 
 HOLD_TOLERANCE = math.radians(0.5)
 
@@ -146,7 +147,26 @@ def prepare(args: dict[str, Any]) -> dict[str, Any]:
                 zero if calibrating else leader_target(initial, offsets, signs, current)
             )
             validate_leg(current, goal, limits, args["max_step_deg"])
-            result = {"initial_rad": current, "target_rad": goal}
+            follow_lo, follow_hi = intersect_soft_limits(
+                limits["rad"], enabled=limits["enabled"]
+            )
+
+            def validate_following(posture: Any, label: str) -> None:
+                violation = limit_violation(posture, follow_lo, follow_hi)
+                if violation is not None:
+                    raise XCoreError(
+                        f"{label} exceeds following soft limits: {violation}. "
+                        "Adjust the arm/leader posture before restarting; "
+                        "no automatic wrapping or clipping is performed."
+                    )
+
+            validate_following(current, "Current robot posture")
+            validate_following(goal, "Preparation target")
+            result = {
+                "initial_rad": current,
+                "target_rad": goal,
+                "follow_limits_rad": np.column_stack((follow_lo, follow_hi)).tolist(),
+            }
             attempted = False
             try:
 
@@ -190,10 +210,12 @@ def prepare(args: dict[str, Any]) -> dict[str, Any]:
                     )
                     goal = leader_target(zero_samples, offsets, signs, actual_zero)
                     validate_leg(actual_zero, goal, limits, args["max_step_deg"])
+                    validate_following(goal, "Preparation target")
                 result["target_rad"] = goal
                 result["alignment_motion"] = move(goal)
                 check_held(initial, stable_raw(leader))
                 result["actual_rad"] = arm.joints()["rad"]
+                validate_following(result["actual_rad"], "Aligned robot posture")
                 result["calibration"] = str(path.resolve())
                 result["calibrated_zero"] = calibrating
                 return result

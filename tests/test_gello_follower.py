@@ -50,6 +50,50 @@ def test_controller_limits_use_content_api_and_cannot_be_disabled(adapter):
         follower.resolve_soft_limits(raw, sdk, {}, 6, None, None)
 
 
+def test_controller_limits_are_intersected_with_shared_following_bounds(adapter):
+    _, sdk, _ = adapter
+    bounds = [[-2 * np.pi, 2 * np.pi]] * 6
+    bounds[1] = [-1, 1]  # a stricter controller setting must still take precedence
+
+    class Buffer:
+        def content(self):
+            return bounds
+
+    sdk.PyTypeVectorArrayDouble2 = Buffer
+    lo, hi = follower.resolve_soft_limits(Robot(), sdk, {}, 6, None, None)
+    assert lo[0] == pytest.approx(-np.pi)
+    assert hi[0] == pytest.approx(np.pi)
+    assert [lo[1], hi[1]] == pytest.approx([-1, 1])
+
+
+def test_first_target_returns_outside_posture_error_before_caching_or_power(adapter):
+    bot, _, _ = adapter
+    bot._enable_motion_requested = True
+    bot._soft_lo[0], bot._soft_hi[0] = -np.pi, np.pi
+    bot._state[0] = np.radians(183.5)
+    with pytest.raises(RuntimeError, match=r"J1\(\+183.5"):
+        dispatch(
+            bot,
+            {
+                "method": "command_joint_state",
+                "args": {"joint_state": bot._state.tolist()},
+            },
+        )
+    assert bot._target is None
+    assert bot._n_commands == 0
+    assert bot.abort_reason() is not None
+    assert not bot._powered_by_us
+
+
+def test_first_target_alignment_gate_is_checked_before_caching(adapter):
+    bot, _, _ = adapter
+    bot._enable_motion_requested = True
+    with pytest.raises(RuntimeError, match="leader 与真机姿态差"):
+        bot.command_joint_state([0.5] * 6)
+    assert bot._target is None
+    assert not bot._powered_by_us
+
+
 def test_commands_are_cached_and_finite_and_protocol_is_six_axis(adapter):
     bot, _, _ = adapter
     assert dispatch(bot, {"method": "num_dofs"}) == 6

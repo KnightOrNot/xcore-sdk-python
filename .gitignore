@@ -6,6 +6,7 @@
 scripts/*
 !scripts/start_gello_follow.sh
 config/*calib*.json
+config/exit_pose.json
 .follow.lock
 
 # Release packaging output
