@@ -38,7 +38,7 @@ zero_cancelled=false
 
 usage() {
     cat <<'EOF'
-用法：./start_gello_follow.sh [选项]
+用法：./scripts/start_gello_follow.sh [选项]
 
 默认只读预览；--enable-motion 才进入六轴真机跟随。
   --ip IP              CR7 IP，默认 192.168.2.160

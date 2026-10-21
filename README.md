@@ -88,7 +88,7 @@ uv run xcore-sdk-python follow-calibrate --ref-current \
 ./scripts/start_gello_follow.sh --enable-motion
 ```
 
-在控制器目录 xcore-controller 中也可直接使用 `./start_gello_follow.sh`，但控制器
+在控制器目录 xcore-controller 中也可直接使用 `./scripts/start_gello_follow.sh`，但控制器
 顶层入口默认同时启用夹爪，需先启动夹爪服务；仅六轴使用 `--arm-only`。
 SDK 的独立脚本默认仅六轴，可用 `--gripper-host` 或 `XCORE_GRIPPER_HOST` 启用夹爪。
 脚本先运行离线参数检查；启用夹爪时在打开 GELLO／连接 CR7 前检查夹爪服务。

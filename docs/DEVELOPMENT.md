@@ -276,7 +276,7 @@ uv run xcore-sdk-python check --fix
 ## 六轴示教臂跟随的工程组织
 
 ```text
-xcore-controller/start_gello_follow.sh                 工作区便捷入口
+xcore-controller/scripts/start_gello_follow.sh                 工作区便捷入口
   → xcore-sdk-python/scripts/start_gello_follow.sh
       → uv run --locked --project ... xcore doctor / follow-check
       → 后台 follow-server                 独占 CR7 SDK 会话
