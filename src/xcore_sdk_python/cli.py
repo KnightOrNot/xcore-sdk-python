@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .driver import DEFAULT_SPEED
+from .configuration import Config, load_config
 from .exceptions import XCoreError
 from .network import configure_address, diagnose
 from .return_zero import DEFAULT_EXIT_POSE, load_exit_pose
@@ -34,26 +34,45 @@ def ipv4(value: str) -> str:
         raise argparse.ArgumentTypeError("Expected an IPv4 address") from exc
 
 
-def parser() -> argparse.ArgumentParser:
+def parser(config: Config | None = None) -> argparse.ArgumentParser:
+    config = config or load_config()
     root = argparse.ArgumentParser(
         prog="xcore-sdk-python", description="xCore robot diagnostics and control"
     )
+    root.add_argument("--config", type=Path, help="TOML defaults file")
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
-        "--ip", type=ipv4, default=os.environ.get("XCORE_ROBOT_IP", "192.168.2.160")
+        "--ip", type=ipv4, default=os.environ.get("XCORE_ROBOT_IP", config.robot.ip)
     )
     common.add_argument(
-        "--local-ip", type=ipv4, default=os.environ.get("XCORE_LOCAL_IP", "")
+        "--local-ip",
+        type=ipv4,
+        default=os.environ.get("XCORE_LOCAL_IP", config.robot.local_ip),
     )
-    common.add_argument("--sdk-dir", help="Directory containing the vendor extension")
     common.add_argument(
-        "--timeout", type=finite, default=20, help="Overall deadline in seconds"
+        "--sdk-dir",
+        default=config.robot.sdk_dir or None,
+        help="Directory containing the vendor extension",
+    )
+    common.add_argument(
+        "--timeout",
+        type=finite,
+        default=config.robot.timeout_s,
+        help="Overall deadline in seconds",
     )
     common.add_argument(
         "--output", type=Path, help="Save JSON to a new file (no overwrite)"
     )
+    common.add_argument(
+        "--config",
+        type=Path,
+        default=argparse.SUPPRESS,
+        help="TOML defaults file (default: <repository>/config/default.toml)",
+    )
     # An empty local IP is valid for non-real-time SDK queries.
-    common.set_defaults(local_ip=os.environ.get("XCORE_LOCAL_IP") or None)
+    common.set_defaults(
+        local_ip=os.environ.get("XCORE_LOCAL_IP") or config.robot.local_ip or None
+    )
     sub = root.add_subparsers(dest="command", required=True)
     for name, help_text in (
         (
@@ -84,8 +103,8 @@ def parser() -> argparse.ArgumentParser:
     monitor = sub.add_parser(
         "monitor", parents=[common], help="Collect status in one session"
     )
-    monitor.add_argument("--duration", type=finite, default=5)
-    monitor.add_argument("--interval", type=finite, default=0.5)
+    monitor.add_argument("--duration", type=finite, default=config.monitor.duration)
+    monitor.add_argument("--interval", type=finite, default=config.monitor.interval)
     power = sub.add_parser("power", parents=[common], help="Explicitly power on/off")
     power.add_argument("value", choices=("on", "off"))
     mode = sub.add_parser(
@@ -99,12 +118,18 @@ def parser() -> argparse.ArgumentParser:
         motion.add_argument(
             "--speed",
             type=finite,
-            default=DEFAULT_SPEED,
+            default=config.motion.speed,
             help="SDK speed in mm/s (default: %(default)s; allowed: 5..4000)",
         )
-        motion.add_argument("--max-step-deg", type=finite, default=10)
-        motion.add_argument("--tolerance-deg", type=finite, default=0.2)
-        motion.add_argument("--motion-timeout", type=finite, default=15)
+        motion.add_argument(
+            "--max-step-deg", type=finite, default=config.motion.max_step_deg
+        )
+        motion.add_argument(
+            "--tolerance-deg", type=finite, default=config.motion.tolerance_deg
+        )
+        motion.add_argument(
+            "--motion-timeout", type=finite, default=config.motion.motion_timeout_s
+        )
         if name == "movej":
             motion.add_argument("--joints", type=finite, nargs=6, required=True)
             motion.add_argument("--unit", choices=("deg", "rad"), default="deg")
@@ -116,15 +141,25 @@ def parser() -> argparse.ArgumentParser:
         parents=[common],
         help="Run the long-lived CR7 GELLO endpoint (dry-run unless enabled)",
     )
-    follow_server.add_argument("--host", default="127.0.0.1")
-    follow_server.add_argument("--port", type=int, default=6001)
+    follow_server.add_argument("--host", default=config.server.host)
+    follow_server.add_argument("--port", type=int, default=config.server.port)
     follow_server.add_argument("--enable-motion", action="store_true")
     follow_server.add_argument("--yes", action="store_true")
-    follow_server.add_argument("--state-hz", type=finite, default=25.0)
-    follow_server.add_argument("--max-speed-deg", type=finite, default=3.0)
-    follow_server.add_argument("--accel-deg-s2", type=finite, default=40.0)
-    follow_server.add_argument("--stale-timeout", type=finite, default=1.0)
-    follow_server.add_argument("--gate-deg", type=finite, default=17.1887)
+    follow_server.add_argument(
+        "--state-hz", type=finite, default=config.server.state_hz
+    )
+    follow_server.add_argument(
+        "--max-speed-deg", type=finite, default=config.server.max_speed_deg
+    )
+    follow_server.add_argument(
+        "--accel-deg-s2", type=finite, default=config.server.accel_deg_s2
+    )
+    follow_server.add_argument(
+        "--stale-timeout", type=finite, default=config.server.stale_timeout_s
+    )
+    follow_server.add_argument(
+        "--gate-deg", type=finite, default=config.server.gate_deg
+    )
     follow_server.add_argument("--quiet", action="store_true")
 
     prepare = sub.add_parser(
@@ -133,21 +168,30 @@ def parser() -> argparse.ArgumentParser:
         help="Align CR7 to the stationary calibrated GELLO target before RT follow",
     )
     prepare.set_defaults(timeout=None)
-    prepare.add_argument(
-        "--serial",
-        default="/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTB4C7PQ-if00-port0",
-    )
-    prepare.add_argument("--baudrate", type=int, default=57600)
-    prepare.add_argument("--calib", type=Path, default=Path("config/cr7_calib.json"))
+    prepare.add_argument("--serial", default=config.gello.port)
+    prepare.add_argument("--baudrate", type=int, default=config.gello.baudrate)
+    prepare.add_argument("--calib", type=Path, default=Path(config.calibration.file))
     prepare.add_argument("--calibrate-zero", action="store_true")
-    prepare.add_argument("--signs", type=int, nargs=6, choices=(-1, 1), default=[1] * 6)
-    prepare.add_argument("--speed", type=finite, default=DEFAULT_SPEED)
-    prepare.add_argument("--max-step-deg", type=finite, default=180)
-    prepare.add_argument("--tolerance-deg", type=finite, default=0.2)
-    prepare.add_argument("--motion-timeout", type=finite, default=600)
+    prepare.add_argument(
+        "--signs", type=int, nargs=6, choices=(-1, 1), default=list(config.gello.signs)
+    )
+    prepare.add_argument("--speed", type=finite, default=config.prepare.speed)
+    prepare.add_argument(
+        "--max-step-deg", type=finite, default=config.prepare.max_step_deg
+    )
+    prepare.add_argument(
+        "--tolerance-deg", type=finite, default=config.prepare.tolerance_deg
+    )
+    prepare.add_argument(
+        "--motion-timeout", type=finite, default=config.prepare.motion_timeout_s
+    )
     prepare.add_argument("--gripper-host")
-    prepare.add_argument("--gripper-port", type=int, default=5005)
-    prepare.add_argument("--gripper-timeout", type=finite, default=0.75)
+    prepare.add_argument(
+        "--gripper-port", type=int, default=config.prepare.gripper_port
+    )
+    prepare.add_argument(
+        "--gripper-timeout", type=finite, default=config.prepare.gripper_timeout_s
+    )
 
     zero = sub.add_parser(
         "return-pose",
@@ -156,12 +200,20 @@ def parser() -> argparse.ArgumentParser:
         help="Return to the saved exit posture (return-zero is a legacy alias)",
     )
     zero.set_defaults(timeout=None)
-    zero.add_argument("--speed", type=finite, default=DEFAULT_SPEED)
-    zero.add_argument("--max-step-deg", type=finite, default=360)
-    zero.add_argument("--tolerance-deg", type=finite, default=0.2)
-    zero.add_argument("--motion-timeout", type=finite, default=600)
+    zero.add_argument("--speed", type=finite, default=config.return_.speed)
+    zero.add_argument(
+        "--max-step-deg", type=finite, default=config.return_.max_step_deg
+    )
+    zero.add_argument(
+        "--tolerance-deg", type=finite, default=config.return_.tolerance_deg
+    )
+    zero.add_argument(
+        "--motion-timeout", type=finite, default=config.return_.motion_timeout_s
+    )
     pose_target = zero.add_mutually_exclusive_group()
-    pose_target.add_argument("--pose-file", type=Path, default=DEFAULT_EXIT_POSE)
+    pose_target.add_argument(
+        "--pose-file", type=Path, default=Path(config.return_.pose_file)
+    )
     pose_target.add_argument(
         "--zero",
         action="store_true",
@@ -179,49 +231,64 @@ def parser() -> argparse.ArgumentParser:
         help="Check independent gripper feedback without connecting to CR7 or moving",
     )
     gripper_check.add_argument("--gripper-host", required=True)
-    gripper_check.add_argument("--gripper-port", type=int, default=5005)
-    gripper_check.add_argument("--gripper-timeout", type=finite, default=0.75)
+    gripper_check.add_argument("--gripper-port", type=int, default=config.gripper.port)
+    gripper_check.add_argument(
+        "--gripper-timeout", type=finite, default=config.gripper.timeout_s
+    )
 
     follow = sub.add_parser(
         "follow", parents=[common], help="Read GELLO leader and stream six CR7 joints"
     )
-    follow.add_argument("--host", default="127.0.0.1", help="follow-server host")
-    follow.add_argument("--port", type=int, default=6001)
+    follow.add_argument("--host", default=config.follow.host, help="follow-server host")
+    follow.add_argument("--port", type=int, default=config.follow.port)
     follow.add_argument(
         "--show-state", action="store_true", help="Print per-cycle state (default: off)"
     )
-    follow.add_argument(
-        "--serial",
-        default="/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTB4C7PQ-if00-port0",
-    )
-    follow.add_argument("--baudrate", type=int, default=57600)
-    follow.add_argument("--calib", type=Path, default=Path("config/cr7_calib.json"))
-    follow.add_argument("--hz", type=finite, default=50.0)
-    follow.add_argument("--gate-deg", type=finite, default=17.1887)
+    follow.add_argument("--serial", default=config.gello.port)
+    follow.add_argument("--baudrate", type=int, default=config.gello.baudrate)
+    follow.add_argument("--calib", type=Path, default=Path(config.calibration.file))
+    follow.add_argument("--hz", type=finite, default=config.follow.hz)
+    follow.add_argument("--gate-deg", type=finite, default=config.follow.gate_deg)
     follow.add_argument("--dry-run", action="store_true")
     follow.add_argument("--allow-uncalibrated", action="store_true")
     follow.add_argument("--yes", action="store_true")
     follow.add_argument(
         "--gripper-host", help="Enable independent gripper following at this TCP host"
     )
-    follow.add_argument("--gripper-port", type=int, default=5005)
-    follow.add_argument("--gripper-id", type=int, default=7)
-    follow.add_argument("--gripper-open-deg", type=finite, default=194.8)
-    follow.add_argument("--gripper-close-deg", type=finite, default=153.0)
-    follow.add_argument("--gripper-open-pos", type=int, default=0)
-    follow.add_argument("--gripper-closed-pos", type=int, default=255)
-    follow.add_argument("--gripper-hz", type=finite, default=5.0)
-    follow.add_argument("--gripper-speed", type=int, default=150)
-    follow.add_argument("--gripper-force", type=int, default=0)
-    follow.add_argument("--gripper-timeout", type=finite, default=0.75)
-    follow.add_argument("--gripper-stale-timeout", type=finite, default=1.5)
+    follow.add_argument("--gripper-port", type=int, default=config.gripper.port)
+    follow.add_argument("--gripper-id", type=int, default=config.gripper.id)
+    follow.add_argument(
+        "--gripper-open-deg", type=finite, default=config.gripper.open_deg
+    )
+    follow.add_argument(
+        "--gripper-close-deg", type=finite, default=config.gripper.close_deg
+    )
+    follow.add_argument("--gripper-open-pos", type=int, default=config.gripper.open_pos)
+    follow.add_argument(
+        "--gripper-closed-pos", type=int, default=config.gripper.closed_pos
+    )
+    follow.add_argument("--gripper-hz", type=finite, default=config.gripper.hz)
+    follow.add_argument("--gripper-speed", type=int, default=config.gripper.speed)
+    follow.add_argument("--gripper-force", type=int, default=config.gripper.force)
+    follow.add_argument(
+        "--gripper-timeout", type=finite, default=config.gripper.timeout_s
+    )
+    follow.add_argument(
+        "--gripper-stale-timeout", type=finite, default=config.gripper.stale_timeout_s
+    )
     follow.add_argument(
         "--raw-data-root", type=Path, help="Enable raw episode recording"
     )
     follow.add_argument("--session-path-file", type=Path)
-    follow.add_argument("--task", default="CR7 GELLO teleoperation")
-    follow.add_argument("--record-queue-size", type=int, default=500)
-    follow.add_argument("--record-feedback-max-age", type=finite, default=0.75)
+    follow.add_argument("--task", default=config.recording.task)
+    follow.add_argument(
+        "--record-queue-size", type=int, default=config.recording.queue_size
+    )
+    follow.add_argument(
+        "--record-feedback-max-age",
+        type=finite,
+        default=config.recording.feedback_max_age_s,
+    )
     follow.add_argument("--start-recording", action="store_true")
 
     follow_check = sub.add_parser(
@@ -229,13 +296,10 @@ def parser() -> argparse.ArgumentParser:
         parents=[common],
         help="Validate calibration and read the leader once; no CR7 SDK session",
     )
+    follow_check.add_argument("--serial", default=config.gello.port)
+    follow_check.add_argument("--baudrate", type=int, default=config.gello.baudrate)
     follow_check.add_argument(
-        "--serial",
-        default="/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTB4C7PQ-if00-port0",
-    )
-    follow_check.add_argument("--baudrate", type=int, default=57600)
-    follow_check.add_argument(
-        "--calib", type=Path, default=Path("config/cr7_calib.json")
+        "--calib", type=Path, default=Path(config.calibration.file)
     )
 
     calibration = sub.add_parser(
@@ -243,21 +307,22 @@ def parser() -> argparse.ArgumentParser:
         parents=[common],
         help="Create read-only single-pose leader offsets; requires matching poses",
     )
-    calibration.add_argument(
-        "--serial",
-        default="/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTB4C7PQ-if00-port0",
-    )
-    calibration.add_argument("--baudrate", type=int, default=57600)
+    calibration.add_argument("--serial", default=config.gello.port)
+    calibration.add_argument("--baudrate", type=int, default=config.gello.baudrate)
     calibration.add_argument(
         "--ref-current",
         action="store_true",
         required=True,
         help="Declare that the leader is already posed like current CR7",
     )
-    calibration.add_argument("--signs", type=int, nargs=6, default=[1, 1, 1, 1, 1, 1])
-    calibration.add_argument("--samples", type=int, default=30)
-    calibration.add_argument("--interval", type=finite, default=0.03)
-    calibration.add_argument("--save", type=Path, default=Path("config/cr7_calib.json"))
+    calibration.add_argument(
+        "--signs", type=int, nargs=6, default=list(config.gello.signs)
+    )
+    calibration.add_argument("--samples", type=int, default=config.calibration.samples)
+    calibration.add_argument(
+        "--interval", type=finite, default=config.calibration.interval_s
+    )
+    calibration.add_argument("--save", type=Path, default=Path(config.calibration.file))
     network = sub.add_parser(
         "network",
         parents=[common],
@@ -266,9 +331,15 @@ def parser() -> argparse.ArgumentParser:
     network.add_argument(
         "action", choices=("check", "configure", "reset"), nargs="?", default="check"
     )
-    network.add_argument("--interface", help="Wired interface for configure/reset")
     network.add_argument(
-        "--address", default="192.168.2.100/24", help="Temporary PC IPv4 address"
+        "--interface",
+        default=config.network.interface or None,
+        help="Wired interface for configure/reset",
+    )
+    network.add_argument(
+        "--address",
+        default=config.network.address,
+        help="Temporary PC IPv4 address",
     )
     return root
 
@@ -472,9 +543,27 @@ def development_check(timeout: float, *, fix: bool = False) -> dict[str, Any]:
     }
 
 
+def config_path(argv: list[str]) -> Path | None:
+    """Find ``--config`` before argparse so defaults can be built from it."""
+
+    selected = None
+    for index, value in enumerate(argv):
+        if value == "--config" and index + 1 < len(argv):
+            selected = Path(argv[index + 1])
+        if value.startswith("--config="):
+            selected = Path(value.split("=", 1)[1])
+    return selected
+
+
 def main(argv: list[str] | None = None) -> int:
-    root = parser()
-    args = root.parse_args(argv)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    try:
+        config = load_config(config_path(arguments))
+    except (OSError, ValueError) as exc:
+        print(f"xcore: invalid configuration: {exc}", file=sys.stderr)
+        return 2
+    root = parser(config)
+    args = root.parse_args(arguments)
     validate(args, root)
     if args.command in ("follow-server", "follow", "follow-calibrate", "follow-check"):
         try:
@@ -500,6 +589,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     options = vars(args).copy()
     options.pop("output")
+    options.pop("config", None)
     if args.command == "follow-prepare":
         options["calib"] = str(args.calib)
     if args.command in ("return-pose", "return-zero"):

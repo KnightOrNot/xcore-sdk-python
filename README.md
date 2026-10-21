@@ -2,6 +2,16 @@
 
 基于珞石 SDK，提供统一入口 `uv run xcore-sdk-python COMMAND [OPTIONS]` 和可复用的 Python 连接／驱动层。开发细节见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)，厂商 SDK 安装说明见 [docs/README.md](docs/README.md)。
 
+## 配置与文档
+
+默认参数集中在 [config/default.toml](config/default.toml)，用 `--config FILE` 覆盖；
+命令行参数优先，`XCORE_ROBOT_IP` / `XCORE_LOCAL_IP` 优先于文件。
+标定和退出姿态是 Git 忽略的现场文件。
+
+- [架构](docs/index.md)、[安装](docs/installation.md)
+- [CLI](docs/reference/cli.md)、[配置](docs/reference/config.md)、[排障](docs/reference/errors.md)
+- [贡献指南](CONTRIBUTING.md)、[更新记录](CHANGELOG.md)
+
 2026-10-04 已先用原生 SDK 完成实机连接、状态、关节角、法兰位姿、软限位和 DH 参数读取，再验证 CLI。实机返回：
 
 | 项目 | 已验证值 |

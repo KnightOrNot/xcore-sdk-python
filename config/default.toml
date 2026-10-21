@@ -1,0 +1,95 @@
+# xcore-sdk-python 默认参数。
+#
+# 优先级：显式命令行参数 > 环境变量（XCORE_ROBOT_IP / XCORE_LOCAL_IP）> 本文件。
+# 未写字段使用包内内置默认值；未知表或未知字段会被拒绝。
+# 相对路径相对于运行 CLI 时的工作目录解析。
+
+[robot]
+# CR7 控制器地址；与 Linux 服务机（192.168.2.225）不是同一台设备。
+ip = "192.168.2.160"
+# 实时控制需要绑定本机网卡地址；空字符串表示不指定。
+local_ip = ""
+# SDK 查询/控制的总超时，秒。
+timeout_s = 20.0
+# 自定义厂商扩展目录；空字符串使用包内 Release/linux 二进制。
+sdk_dir = ""
+
+[monitor]
+duration = 5.0
+interval = 0.5
+
+[motion]
+# SDK 速度参数，单位 mm/s；有效范围 5..4000。不是轴速度。
+speed = 1000.0
+max_step_deg = 10.0
+tolerance_deg = 0.2
+motion_timeout_s = 15.0
+
+[server]
+host = "127.0.0.1"
+port = 6001
+state_hz = 25.0
+# 六轴实时跟随软件限速，单位 °/s；上限 75。
+max_speed_deg = 3.0
+accel_deg_s2 = 40.0
+stale_timeout_s = 1.0
+# 启动对齐前的目标门限，单位 °；17.1887 约等于 0.3 rad。
+gate_deg = 17.1887
+
+[gello]
+port = "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTB4C7PQ-if00-port0"
+baudrate = 57600
+# 主臂到从臂的方向映射；六个值必须为 ±1。
+signs = [1, 1, 1, 1, 1, 1]
+
+[calibration]
+# 现场单姿态标定文件；通常被 Git 忽略，新机器必须重新标定。
+file = "config/cr7_calib.json"
+samples = 30
+interval_s = 0.03
+
+[prepare]
+# 启动对齐的 SDK 速度参数（mm/s），与实时跟随限速独立。
+speed = 1000.0
+max_step_deg = 180.0
+tolerance_deg = 0.2
+motion_timeout_s = 600.0
+gripper_port = 5005
+gripper_timeout_s = 0.75
+
+[return]
+# 退出返回的实测姿态；现场文件通常被 Git 忽略。
+pose_file = "config/exit_pose.json"
+speed = 1000.0
+max_step_deg = 360.0
+tolerance_deg = 0.2
+motion_timeout_s = 600.0
+
+[gripper]
+port = 5005
+id = 7
+open_deg = 194.8
+close_deg = 153.0
+open_pos = 0
+closed_pos = 255
+hz = 5.0
+speed = 150
+force = 0
+timeout_s = 0.75
+stale_timeout_s = 1.5
+
+[follow]
+host = "127.0.0.1"
+port = 6001
+hz = 50.0
+gate_deg = 17.1887
+
+[recording]
+task = "CR7 GELLO teleoperation"
+queue_size = 500
+feedback_max_age_s = 0.75
+
+[network]
+# network configure/reset 使用的有线网卡；空字符串必须由命令行提供。
+interface = ""
+address = "192.168.2.100/24"
