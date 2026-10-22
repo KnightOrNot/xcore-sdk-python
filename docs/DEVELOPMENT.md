@@ -373,14 +373,14 @@ CLI 使用隔离 worker，自动为准备运动设置整体等待时间，中断
 仅 `--show-state` 启用输出；非记录模式的显示用 `get_joint_state` RPC
 同步省去。对齐读取与记录时的 `get_observations` 不受显示设置影响。
 
-## Ctrl+C 后的固定姿态返回
+## Ctrl+C 后的返回
 
-退出目标保存在 SDK 项目 `config/exit_pose.json`，由现场实际反馈采集，
-包含 schema_version=1、robot_ip、六个有限 joints_rad（弧度），并记录采集时间和来源。
-2026-10-21 本次通过正在运行的 ZMQ `get_observations` 获取新鲜实际反馈，
-不新建 SDK 连接、不发运动；完整原始精度保存在文件中。目标保持固定，运行时不重新采集。
-`--return-pose-file`／`XCORE_EXIT_POSE` 可选其他文件；自动返回开启时，启动前离线校验文件，
-再在会话目录保存 `exit_pose.json` 快照。现场文件不提交 Git；新部署需先恢复或配置。
+启动器按 `--return-mode` 选择退出目标，默认 `zero`：返回六轴 0°。
+`start` 模式在启动对齐前用只读 `capture-pose` 记录当前六轴实际反馈，
+写入本次会话的 `logs/follow-*/exit_pose.json`；`none` 禁用返回。
+目标包含 schema_version=1、robot_ip、六个有限 joints_rad（弧度）、采集时间和来源。
+`return-pose --pose-file FILE` 仍可直接返回任意固定姿态文件，
+但启动器不再使用固定 `config/exit_pose.json`。
 
 共享 shell 入口在 Ctrl+C／故障后先停止跟随和准备进程组，持有同一把锁，再调用
 `return-pose --pose-file 会话快照`。返回入口在创建 SDK 对象之前校验六个有限目标与机器人 IP。

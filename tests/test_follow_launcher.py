@@ -115,7 +115,6 @@ def launcher(tmp_path: Path) -> tuple[list[str], dict[str, str], Path]:
     env.pop("XCORE_FOLLOW_MAX_SPEED_DEG", None)
     env.pop("XCORE_PREPARE_SPEED", None)
     env.pop("XCORE_GRIPPER_HOST", None)
-    env.pop("XCORE_EXIT_POSE", None)
     env.pop("XCORE_RETURN_MODE", None)
     cmd = [
         "bash",
@@ -149,7 +148,7 @@ def test_launcher_owns_and_cleans_sessions(launcher, motion: bool) -> None:
     calls = read_calls(path)
     assert [c["args"][1] for c in calls] == (
         ["doctor", "follow-check"]
-        + (["follow-prepare"] if motion else [])
+        + (["capture-pose", "follow-prepare"] if motion else [])
         + ["follow-server", "follow"]
         + (["return-pose"] if motion else [])
     )
@@ -388,6 +387,7 @@ def test_failed_preparation_never_starts_rt_server_or_client(launcher):
     assert [c["args"][1] for c in read_calls(path)] == [
         "doctor",
         "follow-check",
+        "capture-pose",
         "follow-prepare",
         "controller-logs",
         "return-pose",
@@ -420,12 +420,13 @@ def test_first_zero_calibration_uses_sh_entry_without_existing_calibration(launc
     calls = read_calls(path)
     assert [c["args"][1] for c in calls] == [
         "doctor",
+        "capture-pose",
         "follow-prepare",
         "follow-server",
         "follow",
         "return-pose",
     ]
-    assert "--calibrate-zero" in calls[1]["args"]
+    assert "--calibrate-zero" in calls[2]["args"]
 
 
 @pytest.mark.parametrize(
@@ -444,7 +445,7 @@ def test_interrupt_during_preparation_stops_owned_process_before_rt_start(
     )
     try:
         deadline = time.monotonic() + 5
-        while not path.exists() or len(read_calls(path)) < 3:
+        while not path.exists() or len(read_calls(path)) < 4:
             assert time.monotonic() < deadline
             time.sleep(0.02)
         process.send_signal(interrupt)
@@ -454,6 +455,7 @@ def test_interrupt_during_preparation_stops_owned_process_before_rt_start(
         assert [c["args"][1] for c in calls] == [
             "doctor",
             "follow-check",
+            "capture-pose",
             "follow-prepare",
         ] + (["return-pose"] if expected_zero else [])
         assert_children_stopped(calls)
@@ -562,45 +564,17 @@ def test_motion_fault_displays_details_then_recovers_zero_after_shutdown(
     assert_children_stopped(calls)
 
 
-def test_missing_exit_pose_rejects_before_hardware_commands(launcher):
+def test_default_zero_mode_does_not_need_fixed_exit_pose(launcher):
     cmd, env, path = launcher
     (path.parent / "config/exit_pose.json").unlink()
     result = subprocess.run(
         cmd + ["--enable-motion", "--yes"], env=env, capture_output=True, timeout=8
     )
-    assert result.returncode != 0
-    assert not path.exists()
-
-
-def test_exit_pose_is_snapshotted_before_motion_and_kept_fixed(launcher):
-    cmd, env, path = launcher
-    source = path.parent / "config/exit_pose.json"
-    expected = json.loads(source.read_text())
-    process = subprocess.Popen(
-        cmd + ["--enable-motion", "--yes"],
-        env={**env, "HOLD_CLIENT": "1"},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    try:
-        deadline = time.monotonic() + 5
-        while not path.exists() or read_calls(path)[-1]["args"][1] != "follow":
-            assert time.monotonic() < deadline
-            time.sleep(0.02)
-        source.write_text(json.dumps({**expected, "joints_rad": [0] * 6}))
-        process.send_signal(signal.SIGINT)
-        process.communicate(timeout=8)
-        assert process.returncode == 130
-        command = read_calls(path)[-1]["args"]
-        assert command[1] == "return-pose"
-        snapshot = Path(command[command.index("--pose-file") + 1])
-        assert json.loads(snapshot.read_text()) == expected
-        assert snapshot != source
-        assert_children_stopped(read_calls(path))
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait()
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = read_calls(path)
+    assert "capture-pose" in [c["args"][1] for c in calls]
+    assert calls[-1]["args"][1] == "return-pose"
+    assert _pose_from(calls[-1])["joints_rad"] == [0.0] * 6
 
 
 def _pose_from(call: dict) -> dict:
@@ -656,7 +630,7 @@ def test_return_mode_none_disables_capture_and_return(launcher):
     assert "return-pose" not in names
 
 
-@pytest.mark.parametrize("mode", ["bad", "SAVED", ""])
+@pytest.mark.parametrize("mode", ["bad", "SAVED", "saved", ""])
 def test_invalid_return_mode_fails_before_hardware(launcher, mode):
     cmd, env, path = launcher
     result = subprocess.run(

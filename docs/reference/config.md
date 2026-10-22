@@ -92,10 +92,9 @@ motion_timeout_s = 600.0
 标定和退出姿态是现场文件，通常被 Git 忽略。新 clone 不能静默退回零位。
 
 退出返回模式由启动器的 `--return-mode`／`XCORE_RETURN_MODE` 选择，不属于本文件：
-直接使用 SDK 启动器时默认 `saved`；顶层 controller 的 `config/default.toml` 默认
-`start`（启动前记录实际姿态并在退出时返回）。`start` 模式会把目标写到会话
-`logs/follow-*/exit_pose.json`，不需要 `return.pose_file`；`zero` 不需要姿态文件。
-`return.pose_file` 只在 `saved` 模式下使用。
+SDK 启动器和顶层 controller 的默认都是 `zero`（返回六轴 0°）；`start` 会在启动前
+记录实际姿态并在退出时返回，目标写到会话 `logs/follow-*/exit_pose.json`。
+`return.pose_file` 只用于直接执行 `return-pose` CLI；启动器不读取它。
 
 ## gripper
 

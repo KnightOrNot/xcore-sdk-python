@@ -121,8 +121,8 @@ SDK 的独立脚本默认仅六轴，可用 `--gripper-host` 或 `XCORE_GRIPPER_
 | `--arm-only` | 仅六轴，禁用环境变量中的夹爪配置 |
 | `--enable-motion` | 启用实际运动；默认只读预览 |
 | `--yes` | 跳过已确认现场条件后的交互确认 |
-| `--return-pose-file` | 固定退出姿态 JSON；`XCORE_EXIT_POSE` 或 SDK `config/exit_pose.json` |
-| `--no-return` | 禁用 Ctrl+C／故障退出后的返回；兼容旧 `--no-return-zero` |
+| `--return-mode` | 退出返回：`zero`（默认，六轴 0°）、`start`（启动前实际姿态）、`none`（不返回） |
+| `--no-return` | 禁用 Ctrl+C／故障退出后的返回；等价于 `--return-mode none`，兼容旧 `--no-return-zero` |
 
 例如 `./scripts/start_gello_follow.sh --enable-motion --max-speed-deg 10` 设置
 每轴最高 `10°/s`；命令行优先于环境变量，启动时显示实际限速。

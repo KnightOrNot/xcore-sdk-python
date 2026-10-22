@@ -62,7 +62,7 @@ uv run --project xcore-sdk-python xcore [--config FILE] COMMAND [OPTIONS]
 | `--dry-run` | 不发送运动 |
 | `--raw-data-root` | 启用 raw 记录（需要真实跟随和夹爪） |
 | `--task` / `--record-queue-size` | 记录任务与队列 |
-| `--pose-file` | `return-pose` 的姿态文件（`saved` 模式） |
+| `--pose-file` | `return-pose` 直接调用的姿态文件；启动器不再使用固定文件 |
 | `--recover` | 返回前尝试恢复一次被停止的 RT |
 
 ## 跟随启动器的返回模式
@@ -72,15 +72,14 @@ uv run --project xcore-sdk-python xcore [--config FILE] COMMAND [OPTIONS]
 
 | 模式 | 行为 |
 | --- | --- |
+| `zero`（默认） | 返回六轴 0°，不连接设备即可生成目标 |
 | `start` | 启动对齐前调用 `capture-pose` 记录当前实际姿态，退出时返回该姿态 |
-| `saved` | 返回 `--return-pose-file`／`XCORE_EXIT_POSE` 指定的固定姿态（SDK 启动器默认） |
-| `zero` | 返回六轴 0°，不连接设备即可生成目标 |
 | `none` | 不自动返回，等价于 `--no-return` |
 
 模式也可用 `XCORE_RETURN_MODE` 设置。`start` 模式的目标写入本次会话的
-`logs/follow-*/exit_pose.json`，不会修改现场 `config/exit_pose.json`。
+`logs/follow-*/exit_pose.json`，不会修改现场配置。
 Ctrl+C、SIGTERM、正常结束和故障退出都会请求返回；只读预览不返回。
-`--return-pose-file` 只在 `saved` 模式下生效。
+固定姿态文件仍可通过直接执行 `return-pose --pose-file FILE` 使用。
 
 ## 退出码
 

@@ -4,9 +4,9 @@
 
 - 新增 `capture-pose --save FILE [--zero]`：只读记录当前六轴为返回姿态，`--zero`
   生成零位目标且不连接设备。
-- 跟随启动器新增 `--return-mode start|saved|zero|none`；默认 `saved`（直接 SDK 使用），
+- 跟随启动器新增 `--return-mode start|zero|none`；默认 `zero`，
   `start` 在运动前采集姿态并在退出时返回。正常结束、SIGTERM、Ctrl+C 和故障都请求返回，
-  只读预览不返回。`--return-pose-file` 仅用于 `saved`。
+  只读预览不返回。
 - 新增启动器与 CLI 回归测试。
 
 ## 2026-10-21

@@ -48,5 +48,5 @@ flowchart LR
 - 只读命令不发送运动。
 - `follow-server` 默认 dry-run；只有显式 `--enable-motion` 才接受运动目标。
 - 退出返回模式由启动器选择：`start` 在运动前用 `capture-pose` 记录实际姿态并返回，
-  `saved` 返回固定姿态文件，`zero` 返回六轴 0°，`none` 不返回。
+  `zero` 返回六轴 0°（默认），`none` 不返回。
   CLI 的 `return-pose --zero` 仍可显式生成零位目标。
