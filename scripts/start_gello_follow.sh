@@ -9,6 +9,11 @@ local_ip="${XCORE_LOCAL_IP:-192.168.2.100}"
 gello_port="${XCORE_GELLO_PORT:-/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTB4C7PQ-if00-port0}"
 calib="$sdk_dir/config/cr7_calib.json"
 return_pose_file="${XCORE_EXIT_POSE:-$sdk_dir/config/exit_pose.json}"
+# start: capture the actual posture before motion and return there.
+# saved: return the configured exit_pose.json.
+# zero: return six zero angles. none: do not return automatically.
+return_mode="${XCORE_RETURN_MODE:-saved}"
+return_mode_explicit=false
 server_port=6001
 hz=50
 # 六轴实时跟随速度上限（°/s）；命令行可覆盖环境变量和默认值。
@@ -60,8 +65,13 @@ usage() {
   --prepare-motion-timeout S 每段准备运动等待时间，默认 600 s
   --prepare-max-step-deg V   每轴准备运动最大角度差，默认 180°
   --yes                跳过启用运动的交互确认
-  --return-pose-file FILE  退出固定姿态；默认 config/exit_pose.json，可用 XCORE_EXIT_POSE 覆盖
-  --no-return         禁用 Ctrl+C／故障退出后的返回；--no-return-zero 是兼容别名
+  --return-mode MODE   退出返回模式：start=返回本次启动前记录的实际姿态；
+                       saved=返回固定 exit_pose.json；zero=返回六轴 0°；
+                       none=不自动返回。默认 saved，可用 XCORE_RETURN_MODE 覆盖
+  --return-pose-file FILE  退出固定姿态（仅 saved 模式）；默认 config/exit_pose.json，
+                       可用 XCORE_EXIT_POSE 覆盖
+  --no-return         禁用 Ctrl+C／故障退出后的返回；等价于 --return-mode none
+                       --no-return-zero 是兼容别名
   --show-state         显示每帧主／从臂与夹爪状态；默认不循环打印
   --gripper-host HOST  同时跟随外接夹爪；同机服务使用 127.0.0.1
                        可设置 XCORE_GRIPPER_HOST；控制器顶层入口默认启用夹爪
@@ -139,7 +149,7 @@ cleanup() {
     if [[ "$return_zero_requested" == true && "$motion_started" == true && "$return_zero_enabled" == true ]]; then
         if [[ "$shutdown_ok" == true ]]; then
             [[ "$fault_exit" != true ]] || echo "[故障返回] 记录已关闭；尝试恢复实时故障一次，再返回固定姿态，不自动重启跟随。" >&2
-            echo "[退出返回] 跟随会话已关闭；六轴返回本次保存姿态，SDK 速度 ${prepare_speed} mm/s。再次 Ctrl+C 可停止返回。"
+            echo "[退出返回] 跟随会话已关闭；六轴返回${return_label}，SDK 速度 ${prepare_speed} mm/s。再次 Ctrl+C 可停止返回。"
             trap cancel_return_zero INT TERM USR1
             PYTHONUNBUFFERED=1 setsid "${xcore[@]}" return-pose \
                 --ip "$robot_ip" --local-ip "$local_ip" --speed "$prepare_speed" \
@@ -161,7 +171,7 @@ cleanup() {
                 "${xcore[@]}" controller-logs --ip "$robot_ip" --local-ip "$local_ip" --timeout 10 9>&- || true
                 (( exit_code != 0 && exit_code != 130 )) || exit_code=1
             else
-                echo "[退出返回] 六轴已到达保存姿态。"
+                echo "[退出返回] 六轴已到达${return_label}。"
             fi
         else
             echo "SDK 子进程未正常停止，已跳过返回；请核对示教器。" >&2
@@ -187,7 +197,14 @@ while (( $# > 0 )); do
         --enable-motion) enable_motion=true; shift ;;
         --yes) assume_yes=true; shift ;;
         --no-return|--no-return-zero) return_zero_enabled=false; shift ;;
-        --return-pose-file) return_pose_file="${2:?缺少返回姿态文件}"; shift 2 ;;
+        --return-mode)
+            return_mode="${2:?缺少返回模式}"; return_mode_explicit=true
+            [[ "$return_mode" == none ]] || return_zero_enabled=true
+            shift 2 ;;
+        --return-pose-file)
+            return_pose_file="${2:?缺少返回姿态文件}"
+            [[ "$return_mode_explicit" == true ]] || return_mode=saved
+            shift 2 ;;
         --skip-prepare) skip_prepare=true; shift ;;
         --calibrate-zero) calibrate_zero=true; shift ;;
         --prepare-speed) prepare_speed="${2:?缺少准备速度}"; shift 2 ;;
@@ -211,6 +228,18 @@ while (( $# > 0 )); do
         *) usage >&2; fail "未知参数：$1" ;;
     esac
 done
+
+case "$return_mode" in
+    start|saved|zero) ;;
+    none) return_zero_enabled=false ;;
+    *) fail "返回模式必须是 start、saved、zero 或 none：$return_mode" ;;
+esac
+case "$return_mode" in
+    start) return_label="本次启动前记录的实际姿态" ;;
+    saved) return_label="保存姿态" ;;
+    zero) return_label="六轴 0°" ;;
+    *) return_label="（未启用）" ;;
+esac
 
 if [[ "$arm_only" == true ]]; then
     [[ "$gripper_host_explicit" == false ]] || fail "--arm-only 不能与 --gripper-host 同时使用"
@@ -252,7 +281,7 @@ prepare = root.parse_args(["follow-prepare", "--speed", sys.argv[7],
 validate(prepare, root)
 PY
 
-if [[ "$enable_motion" == true && "$return_zero_enabled" == true ]]; then
+if [[ "$enable_motion" == true && "$return_zero_enabled" == true && "$return_mode" == saved ]]; then
     uv run --locked --project "$sdk_dir" python - "$return_pose_file" "$robot_ip" <<'PY'
 import sys
 from xcore_sdk_python.return_zero import load_exit_pose
@@ -277,7 +306,12 @@ if [[ "$enable_motion" == true && "$assume_yes" != true ]]; then
     if [[ "$calibrate_zero" == true ]]; then
         echo "首次标定要求 GELLO 处于六轴 0° 姿态；CR7 将先归到六轴 0°。"
     fi
-    echo "Ctrl+C 或故障退出时返回保存姿态：$return_pose_file；确认返回路径，或使用 --no-return。"
+    if [[ "$return_zero_enabled" == true ]]; then
+        echo "Ctrl+C／正常结束／故障退出时返回${return_label}；使用 --no-return 可禁用。"
+        [[ "$return_mode" != saved ]] || echo "返回姿态文件：$return_pose_file"
+    else
+        echo "已禁用退出返回；请自行确认从臂停留姿态。"
+    fi
     read -r -p "将准备对齐并启用跟随；准备期间保持 GELLO 不动，确认运动范围后输入 y：" answer
     [[ "$answer" == y || "$answer" == yes ]] || { echo "已取消。"; exit 0; }
 fi
@@ -285,7 +319,21 @@ fi
 mkdir -p "$sdk_dir/logs"
 session_dir="$(mktemp -d "$sdk_dir/logs/follow-$(date +%Y%m%d-%H%M%S)-XXXXXX")"
 if [[ "$enable_motion" == true && "$return_zero_enabled" == true ]]; then
-    cp -- "$return_pose_file" "$session_dir/exit_pose.json"
+    case "$return_mode" in
+        saved)
+            cp -- "$return_pose_file" "$session_dir/exit_pose.json"
+            ;;
+        start)
+            echo "[退出返回] 启动前记录当前从臂关节，退出时返回该姿态。"
+            "${xcore[@]}" capture-pose --ip "$robot_ip" --local-ip "$local_ip" \
+                --save "$session_dir/exit_pose.json" --output "$session_dir/start_pose_request.json" 9>&-
+            ;;
+        zero)
+            "${xcore[@]}" capture-pose --ip "$robot_ip" \
+                --save "$session_dir/exit_pose.json" --zero \
+                --output "$session_dir/zero_pose_request.json" 9>&-
+            ;;
+    esac
 fi
 [[ "$enable_motion" == false ]] || motion_started=true
 if [[ "$enable_motion" == true && "$skip_prepare" == false ]]; then
@@ -337,4 +385,8 @@ PYTHONUNBUFFERED=1 setsid "${xcore[@]}" follow --port "$server_port" \
     --serial "$gello_port" --calib "$calib" --hz "$hz" \
     "${client_options[@]}" "${gripper_options[@]}" 9>&- <&0 &
 client_pid=$!
+# A normal client exit (not only Ctrl+C) also returns to the recorded target.
+if [[ "$motion_started" == true ]]; then
+    return_zero_requested=true
+fi
 wait "$client_pid"

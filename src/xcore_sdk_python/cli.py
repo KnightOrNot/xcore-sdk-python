@@ -10,6 +10,7 @@ import math
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -223,6 +224,20 @@ def parser(config: Config | None = None) -> argparse.ArgumentParser:
         "--recover",
         action="store_true",
         help="Recover stopped RT once before returning; finish powered off/manual",
+    )
+
+    capture_pose = sub.add_parser(
+        "capture-pose",
+        parents=[common],
+        help="Save the current six joints as a return target; no motion",
+    )
+    capture_pose.add_argument(
+        "--save", type=Path, required=True, help="New pose JSON file (no overwrite)"
+    )
+    capture_pose.add_argument(
+        "--zero",
+        action="store_true",
+        help="Write six zero angles without connecting to the robot",
     )
 
     gripper_check = sub.add_parser(
@@ -472,6 +487,11 @@ def validate(args: argparse.Namespace, root: argparse.ArgumentParser) -> None:
         root.error("calibration needs at least two samples and a positive interval")
     if args.command == "follow-calibrate" and args.save.exists():
         root.error("--save already exists; choose a new calibration file")
+    if args.command == "capture-pose":
+        if args.save.exists():
+            root.error("--save already exists; choose a new pose file")
+        if args.timeout <= 0:
+            root.error("--timeout must be positive")
 
 
 def terminate(process: subprocess.Popen, *, grace: float = 1) -> None:
@@ -511,6 +531,52 @@ def isolated(options: dict[str, Any]) -> dict[str, Any]:
     raise XCoreError(
         f"SDK worker exited {child.returncode}: {errors.strip() or output.strip()}"
     )
+
+
+def capture_pose(args: argparse.Namespace) -> dict[str, Any]:
+    """Write a schema-1 return pose from current feedback or explicit zero."""
+
+    path = Path(args.save)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if args.zero:
+        radians = [0.0] * 6
+        degrees = [0.0] * 6
+        source = "explicit zero return target; no robot connection"
+    else:
+        response = isolated(
+            {
+                "command": "joints",
+                "ip": args.ip,
+                "local_ip": args.local_ip or "",
+                "timeout": args.timeout,
+                "sdk_dir": args.sdk_dir,
+            }
+        )
+        if not response.get("ok"):
+            raise XCoreError(response.get("error", "joints query failed"))
+        result = response["result"]
+        radians = [float(value) for value in result["rad"][:6]]
+        degrees = [float(value) for value in result["deg"][:6]]
+        if len(radians) != 6 or len(degrees) != 6:
+            raise XCoreError("Current feedback did not contain six joints")
+        source = "CR7 actual joint feedback captured before follow; read-only"
+    data = {
+        "schema_version": 1,
+        "robot_ip": args.ip,
+        "joints_rad": radians,
+        "joints_deg": degrees,
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+        "source": source,
+    }
+    with path.open("x", encoding="utf-8") as stream:
+        json.dump(data, stream, ensure_ascii=False, indent=2, allow_nan=False)
+        stream.write("\n")
+    return {
+        "saved": str(path.resolve()),
+        "joints_rad": radians,
+        "joints_deg": degrees,
+        "source": source,
+    }
 
 
 def development_check(timeout: float, *, fix: bool = False) -> dict[str, Any]:
@@ -606,6 +672,12 @@ def main(argv: list[str] | None = None) -> int:
             response = {"ok": True, "command": "network", "result": result}
         elif args.command == "check":
             response = development_check(args.timeout, fix=args.fix)
+        elif args.command == "capture-pose":
+            response = {
+                "ok": True,
+                "command": "capture-pose",
+                "result": capture_pose(args),
+            }
         else:
             response = isolated(options)
     except subprocess.TimeoutExpired:

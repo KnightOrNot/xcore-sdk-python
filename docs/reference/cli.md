@@ -44,6 +44,7 @@ uv run --project xcore-sdk-python xcore [--config FILE] COMMAND [OPTIONS]
 | `follow` | 读取 GELLO 并发送六轴目标；`--gripper-host` 启用夹爪 |
 | `follow-prepare` | 启动对齐到主臂当前目标 |
 | `return-pose`（别名 `return-zero`） | 返回保存姿态；`--zero` 才回零 |
+| `capture-pose --save FILE [--zero]` | 记录当前六轴为返回姿态；只读，无运动；`--zero` 写零目标且不连接 |
 | `follow-check` | 校验标定并只读一次主臂 |
 | `follow-calibrate --ref-current` | 生成现场单姿态标定 |
 | `gripper-check --gripper-host H` | 只读夹爪反馈 |
@@ -61,8 +62,25 @@ uv run --project xcore-sdk-python xcore [--config FILE] COMMAND [OPTIONS]
 | `--dry-run` | 不发送运动 |
 | `--raw-data-root` | 启用 raw 记录（需要真实跟随和夹爪） |
 | `--task` / `--record-queue-size` | 记录任务与队列 |
-| `--pose-file` | 退出姿态文件 |
+| `--pose-file` | `return-pose` 的姿态文件（`saved` 模式） |
 | `--recover` | 返回前尝试恢复一次被停止的 RT |
+
+## 跟随启动器的返回模式
+
+`xcore-sdk-python/scripts/start_gello_follow.sh`（以及顶层 controller 包装）在退出时
+按 `--return-mode` 选择目标：
+
+| 模式 | 行为 |
+| --- | --- |
+| `start` | 启动对齐前调用 `capture-pose` 记录当前实际姿态，退出时返回该姿态 |
+| `saved` | 返回 `--return-pose-file`／`XCORE_EXIT_POSE` 指定的固定姿态（SDK 启动器默认） |
+| `zero` | 返回六轴 0°，不连接设备即可生成目标 |
+| `none` | 不自动返回，等价于 `--no-return` |
+
+模式也可用 `XCORE_RETURN_MODE` 设置。`start` 模式的目标写入本次会话的
+`logs/follow-*/exit_pose.json`，不会修改现场 `config/exit_pose.json`。
+Ctrl+C、SIGTERM、正常结束和故障退出都会请求返回；只读预览不返回。
+`--return-pose-file` 只在 `saved` 模式下生效。
 
 ## 退出码
 

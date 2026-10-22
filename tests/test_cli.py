@@ -99,3 +99,34 @@ def test_worker_timeout_leaves_no_background_process(monkeypatch):
     with pytest.raises(subprocess.TimeoutExpired):
         cli.isolated({"command": "doctor", "timeout": 0.05})
     assert all(child.poll() is not None for child in children)
+
+
+def test_capture_pose_writes_schema_one_without_motion(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        cli,
+        "isolated",
+        lambda options: {
+            "ok": True,
+            "result": {"rad": [0.1] * 6, "deg": [5.0] * 6},
+        },
+    )
+    path = tmp_path / "session" / "exit_pose.json"
+    assert cli.main(["capture-pose", "--save", str(path)]) == 0
+    data = json.loads(path.read_text())
+    assert data["schema_version"] == 1
+    assert data["robot_ip"] == "192.168.2.160"
+    assert data["joints_rad"] == [0.1] * 6
+    assert data["joints_deg"] == [5.0] * 6
+    assert "captured_at" in data
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["capture-pose", "--save", str(path)])
+    assert exc.value.code == 2
+
+
+def test_capture_pose_zero_does_not_connect(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "isolated", lambda _: pytest.fail("must not connect"))
+    path = tmp_path / "zero.json"
+    assert cli.main(["capture-pose", "--save", str(path), "--zero"]) == 0
+    data = json.loads(path.read_text())
+    assert data["joints_rad"] == [0.0] * 6
+    assert data["joints_deg"] == [0.0] * 6
