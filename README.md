@@ -6,7 +6,7 @@
 
 默认参数集中在 [config/default.toml](config/default.toml)，用 `--config FILE` 覆盖；
 命令行参数优先，`XCORE_ROBOT_IP` / `XCORE_LOCAL_IP` 优先于文件。
-标定和退出姿态是 Git 忽略的现场文件。
+退出姿态是 Git 忽略的现场文件；`config/cr7_calib.json` 随仓库提供，但只对 192.168.2.160 有效。
 
 - [架构](docs/index.md)、[安装](docs/installation.md)
 - [CLI](docs/reference/cli.md)、[配置](docs/reference/config.md)、[排障](docs/reference/errors.md)

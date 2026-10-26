@@ -89,7 +89,7 @@ tolerance_deg = 0.2
 motion_timeout_s = 600.0
 ```
 
-标定和退出姿态是现场文件，通常被 Git 忽略。新 clone 不能静默退回零位。
+`config/exit_pose.json` 是 Git 忽略的现场文件。`config/cr7_calib.json` 随仓库提供，内容是 192.168.2.160 的现场标定，换机械臂必须重新生成；缺文件时不能静默退回零位。
 
 退出返回模式由启动器的 `--return-mode`／`XCORE_RETURN_MODE` 选择，不属于本文件：
 SDK 启动器和顶层 controller 的默认都是 `zero`（返回六轴 0°）；`start` 会在启动前
