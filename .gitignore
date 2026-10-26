@@ -6,6 +6,9 @@
 scripts/*
 !scripts/start_gello_follow.sh
 config/*calib*.json
+# The 192.168.2.160 site calibration ships so a clone can drive that robot;
+# re-run follow-calibrate for any other robot.
+!config/cr7_calib.json
 config/exit_pose.json
 .follow.lock
 

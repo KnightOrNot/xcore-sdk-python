@@ -74,7 +74,7 @@ uv run xcore-sdk-python follow-calibrate --ref-current \
   --save config/cr7_calib.json
 ```
 
-标定文件不纳入 Git，已有文件不会被覆盖。单姿态标定无法自动判断轴方向；默认六轴方向均为 `+1`，若现场方向不同，用 `--signs S1 S2 S3 S4 S5 S6` 指定六个 `+1`／`-1`，再重新标定并逐轴核对 dry-run。完整帮助：`uv run xcore-sdk-python follow-calibrate --help`。
+仓库内的 `config/cr7_calib.json` 是 **192.168.2.160 这台 CR7 的现场标定**（2026-10-08，单姿态 30 次采样），随仓库提供以便直接驱动该机器；已有文件不会被覆盖。**换一台机械臂必须重新标定**，不能沿用本文件的 offset。单姿态标定无法自动判断轴方向；默认六轴方向均为 `+1`，若现场方向不同，用 `--signs S1 S2 S3 S4 S5 S6` 指定六个 `+1`／`-1`，再重新标定并逐轴核对 dry-run。完整帮助：`uv run xcore-sdk-python follow-calibrate --help`。
 
 首次仅使用 shell 标定时，GELLO 保持 CR7 六轴均为 0° 的标准姿态：
 
