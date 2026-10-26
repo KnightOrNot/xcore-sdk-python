@@ -67,12 +67,14 @@ class GripperFollower:
         closed_pos: int = 255,
         stale_timeout: float = 1.5,
         initial_feedback: dict[str, Any] | None = None,
+        poll_when_idle: bool = False,
     ) -> None:
         self._client = client
         self._period = 1.0 / hz
         self._speed, self._force = speed, force
         self._open, self._closed = open_pos, closed_pos
         self._stale_timeout = stale_timeout
+        self._poll_when_idle = poll_when_idle
         self._lock = threading.Lock()
         self._stopping = threading.Event()
         self._target: tuple[float, float] | None = None
@@ -123,6 +125,15 @@ class GripperFollower:
                         feedback_time_ns=time.monotonic_ns(),
                         requested_closure=closure,
                         command_position_raw=pos,
+                    )
+                    with self._lock:
+                        self._feedback = state
+                elif self._poll_when_idle:
+                    # RT initialization can take longer than feedback_max_age.
+                    # Keep observing without sending any motion target until the
+                    # arm owner confirms that its RT loop is actually ready.
+                    state = dict(
+                        self._client.check(), feedback_time_ns=time.monotonic_ns()
                     )
                     with self._lock:
                         self._feedback = state

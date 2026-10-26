@@ -141,6 +141,24 @@ def test_motion_reports_actual_target_and_requests_zero_blend(fake):
     assert robot.calls.index("moveReset") < robot.calls.index("moveStart")
 
 
+def test_prepared_nrt_move_does_not_repeat_mode_switch(fake, monkeypatch):
+    sdk, robot = fake
+
+    def switch(mode, ec):
+        robot.calls.append("setMotionControlMode")
+        robot.power = sdk.PowerState.off
+        ec.update(ec=0)
+
+    monkeypatch.setattr(robot, "setMotionControlMode", switch)
+    arm = RobotDriver("192.168.2.160", sdk=sdk, robot=robot)
+    assert arm.movej([0.01] * 6, motion_mode_prepared=True)["reached"]
+    assert "setMotionControlMode" not in robot.calls
+    assert "setPowerState" not in robot.calls
+    with pytest.raises(XCoreError, match="powered off while selecting NRT"):
+        arm.movej([0.02] * 6)
+    assert robot.calls.count("moveStart") == 1
+
+
 @pytest.mark.parametrize("requested, expected", [(None, 1000), (50, 50)])
 def test_motion_speed_default_and_override_are_forwarded_to_sdk(
     fake, monkeypatch, requested, expected

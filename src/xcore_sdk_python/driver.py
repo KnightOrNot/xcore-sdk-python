@@ -38,6 +38,7 @@ class RobotDriver(RobotConnection):
         max_step_deg: float = 10,
         tolerance_deg: float = 0.2,
         motion_timeout: float = 15,
+        motion_mode_prepared: bool = False,
     ) -> dict[str, Any]:
         target = vector(target_rad, 6, "joint target")
         if not math.isfinite(speed) or not 5 <= speed <= 4000:
@@ -68,7 +69,15 @@ class RobotDriver(RobotConnection):
                 raise XCoreError(f"Joint {index} target exceeds controller soft limits")
             if abs(goal - now) > math.radians(max_step_deg):
                 raise XCoreError(f"Joint {index} step exceeds {max_step_deg} degrees")
-        self.call("setMotionControlMode", self.sdk.MotionControlMode.NrtCommandMode)
+        # Owners transitioning from RT must select NRT *before* powering on.
+        # Repeating that selection here can power the controller off again.
+        if not motion_mode_prepared:
+            self.call("setMotionControlMode", self.sdk.MotionControlMode.NrtCommandMode)
+        if self.call("powerState") != self.sdk.PowerState.on:
+            raise XCoreError(
+                "Robot powered off while selecting NRT mode; select the motion "
+                "mode before explicit power on. No motion was queued."
+            )
         self.call("moveReset")
         command = self.sdk.MoveAbsJCommand(target, speed, 0)
         identifier = self.sdk.PyString()

@@ -27,7 +27,6 @@ DEFAULT_MAX_STEP_RAD = 0.0  # automatic: max_speed * DT_CLAMP_S
 DT_CLAMP_S = 0.0015  # bounds a delayed callback's implicit 1 ms command velocity
 DEFAULT_DEADBAND_DEG = 0.05
 CB_STALL_S = 0.5
-DEFAULT_MOVEJ_SPEED = 0.1  # zero-distance RT initialization
 DEFAULT_TRACK_TOL_RAD = 0.15
 DEFAULT_TRACK_TIMEOUT = 1.0
 
@@ -186,6 +185,7 @@ class GelloCr7Robot:
         self._powered_by_us = False
         self._mode_changed = False
         self._shutdown_done = False
+        self._shutdown_error: str | None = None
         # 新路径：回调的输出（**回调线程原地写**）与每轴速度（回调线程写）
         self._out: Optional[list] = None
         self._accl_v: Optional[list] = None
@@ -307,11 +307,14 @@ class GelloCr7Robot:
     # ------------------------------------------------------------------ 生命周期
     def close(self) -> None:
         self._running = False
-        try:
-            self._thread.join(timeout=3.0)
-        except Exception:
-            pass
+        self._thread.join(timeout=10.0)
+        if self._thread.is_alive():
+            raise RuntimeError(
+                "RT servo thread did not exit; do not start another motion"
+            )
         self._shutdown_motion(verbose=self._verbose)
+        if self._shutdown_error:
+            raise RuntimeError(self._shutdown_error)
 
     # ------------------------------------------------------------------ 内部：读关节
     def _read_joints(self, required: bool = False) -> np.ndarray:
@@ -533,11 +536,10 @@ class GelloCr7Robot:
             print(f"    ⑥ rtCon.setFilterLimit(True, {DEFAULT_FILTER_HZ})")
             self._rt_con.setFilterLimit(True, DEFAULT_FILTER_HZ)
 
-            # Initialize RT with current feedback as both endpoints.
-            print(f"    ⑦ rtCon.MoveJ({DEFAULT_MOVEJ_SPEED}, 当前角, 当前角)")
-            self._rt_con.MoveJ(DEFAULT_MOVEJ_SPEED, q, q)
-
-            print("    ⑧ 建回调（**回调自己插值**，从当前角连续爬升）")
+            # The first callback is already initialized at measured feedback.
+            # MoveJ internally starts its own loop and is deprecated by the SDK;
+            # stacking it with startMove/startLoop can leave duplicate motions.
+            print("    ⑦ 建回调（从当前角开始，不启动额外的 RT MoveJ）")
             # The first callback starts exactly at current feedback, with zero velocity.
             self._out = [float(x) for x in q]
             self._accl_v = [0.0] * self._dofs
@@ -675,9 +677,27 @@ class GelloCr7Robot:
         # ★ 防死锁守卫：循环没停下来之前，**任何** SDK 调用都可能和 RT 线程抢 GIL 死锁。
         #   宁可提前返回、把话说清楚，也不要让收尾卡死（卡死过一次，只能 kill -9）。
         if self._loop_started and not self._cb_state["ended"]:
+            self._shutdown_error = (
+                "RT callback did not finish; restart requires recovery"
+            )
             print("    !! RT 循环未在 3s 内自行结束 —— 跳过后续 SDK 调用以免死锁。")
             print("       请在示教器确认停止，并按控制器流程恢复模式。")
             return
+        if self._loop_started and self._rt_con is not None:
+            # setFinished ends motion commands; startLoop(False)'s scheduler
+            # still must be joined with stopLoop before the next cycle (SDK doc).
+            # Only call after the final Python callback has returned, avoiding
+            # the GIL deadlock caused by joining a live Python callback.
+            time.sleep(0.01)
+            try:
+                self._rt_con.stopLoop()
+                self._loop_started = False
+                if verbose:
+                    print("    · rtCon.stopLoop()（最终回调已结束）")
+            except Exception as e:
+                self._shutdown_error = f"RT scheduler shutdown failed: {e}"
+                print(f"    ! {self._shutdown_error}")
+                return
         # startMove() 的官方文档：「正确停止方法是调用 stopMove」。
         # 不调 stopMove 就切模式/下电，「可能会失败」（原文）。
         if self._rt_con is not None:
@@ -686,6 +706,7 @@ class GelloCr7Robot:
                 if verbose:
                     print("    · rtCon.stopMove()")
             except Exception as e:
+                self._shutdown_error = f"RT stopMove failed: {e}"
                 print(f"    ! rtCon.stopMove() 异常：{e}")
             self._rt_con = None
         if self._mode_changed:

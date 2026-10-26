@@ -1,5 +1,14 @@
 # 更新记录
 
+## 2026-10-26
+
+- RT 启动不再调用额外 MoveJ；非阻塞调度在最终回调结束后显式 stopLoop，再 stopMove。
+  close 确认伺服线程退出并报告清理异常。实机连续两轮同会话启停通过。
+- GripperFollower 新增可选的启动只读轮询，供远端 arm 阶段保持反馈新鲜，默认不改变旧链路。
+- `RobotDriver.movej()` 新增 `motion_mode_prepared`，供已先设置 NRT 再上电的
+  独占 SDK owner 跳过重复模式切换；下发运动前再次确认上电，切换导致下电时拒绝排队，
+  不自动重新上电。controller 的 prepare／Q 返回使用此路径；真机返回待现场验证。
+
 ## 2026-10-22
 
 - 新增 `capture-pose --save FILE [--zero]`：只读记录当前六轴为返回姿态，`--zero`

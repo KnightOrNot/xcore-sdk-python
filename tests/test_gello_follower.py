@@ -205,3 +205,50 @@ def test_failed_power_restores_changed_modes(adapter):
     assert bot._arm_motion(np.zeros(6), np.zeros(6)) is False
     bot.close()
     assert events == ["rt", "automatic", "nrt", "manual"]
+
+
+def test_shutdown_joins_finished_scheduler_before_stopping_motion(adapter):
+    bot, _, _ = adapter
+    events = []
+    bot._loop_started = True
+    bot._cb_state["ended"] = True
+    bot._rt_con = SimpleNamespace(
+        stopLoop=lambda: events.append("join scheduler"),
+        stopMove=lambda: events.append("stop motion"),
+    )
+    bot.close()
+    bot.close()
+    assert events == ["join scheduler", "stop motion"]
+    assert bot._shutdown_error is None
+
+
+def test_startup_does_not_stack_an_extra_movej_loop(adapter):
+    bot, sdk, _ = adapter
+    events = []
+    sdk.MotionControlMode = SimpleNamespace(RtCommandMode="rt", NrtCommandMode="nrt")
+    sdk.OperateMode = SimpleNamespace(automatic="automatic", manual="manual")
+    sdk.RtControllerMode = SimpleNamespace(jointPosition="joint")
+    rt = SimpleNamespace(
+        setFilterLimit=lambda *args: None,
+        setControlLoopJoi=lambda *args: None,
+        startMove=lambda *args: events.append("start move"),
+        startLoop=lambda *args: events.append("start loop"),
+        stopLoop=lambda: events.append("stop loop"),
+        stopMove=lambda: events.append("stop move"),
+    )  # No MoveJ API: startup must work without creating that extra loop.
+    bot._robot = CheckedRobot(
+        SimpleNamespace(
+            setRtNetworkTolerance=lambda *args: None,
+            setMotionControlMode=lambda *args: None,
+            setOperateMode=lambda *args: None,
+            setPowerState=lambda *args: None,
+            getRtMotionController=lambda: rt,
+            stopReceiveRobotState=lambda: None,
+        )
+    )
+    assert bot._arm_motion(np.zeros(6), np.zeros(6))
+    assert events == ["start move", "start loop"]
+    bot._cb_state["stop"] = True
+    bot._cb()
+    bot.close()
+    assert events[-2:] == ["stop loop", "stop move"]
